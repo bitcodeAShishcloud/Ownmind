@@ -1,0 +1,37 @@
+{
+  "name": "ownmind",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A private place for everything you save.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "npm run test:data && npm run test:smoke && npm run test:auth && npm run test:design",
+    "test:data": "tsx scripts/test-data.mts",
+    "test:smoke": "node scripts/smoke.mjs",
+    "test:auth": "tsx scripts/test-auth.mts",
+    "test:design": "node scripts/audit-design.mjs",
+    "favicon": "node scripts/make-favicon.mjs && node scripts/verify-favicon.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "^1.48.0",
+    "next": "16.3.6",
+    "node-html-parser": "^9.0.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^24.19.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.6",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.15",
+    "typescript": "^5"
+  }
+}
