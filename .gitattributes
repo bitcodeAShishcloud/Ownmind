@@ -1,0 +1,5 @@
+# Docker parses these as instructions, one per line, and a CRLF checkout can
+# break a RUN continuation line. Pin them to LF so the build is the same on
+# Windows, on the build server, and in the clone.
+Dockerfile    text eol=lf
+.dockerignore text eol=lf

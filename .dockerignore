@@ -1,0 +1,25 @@
+# The live database and the uploaded photos. They are created inside the
+# container and kept by the host, never copied in from a build.
+.data
+.data-*
+
+# Reinstalled by the deps stage. Copying the host's node_modules in would bring
+# Windows binaries along and break the build.
+node_modules
+.next
+out
+build
+
+# Secrets are set on the host, through the dashboard or environment settings.
+.env*
+!.env.example
+
+# Nothing here belongs in an image.
+.git
+.gitignore
+.vscode
+.idea
+*.log
+.DS_Store
+Thumbs.db
+coverage
