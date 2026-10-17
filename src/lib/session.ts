@@ -38,7 +38,7 @@ export function findUserById(id: string) {
 }
 
 /** `passwordHash` must already be hashed with `hashPassword`. */
-export function insertUser(email: string, passwordHash: string, name: string) {
+export function insertUser(email: string, passwordHash: string, name?: string | null) {
   const id = newId()
   const createdAt = nowIso()
 
@@ -51,7 +51,7 @@ export function insertUser(email: string, passwordHash: string, name: string) {
       id,
       email.trim().toLowerCase(),
       passwordHash,
-      name.trim() || null,
+      name?.trim() || null,
       createdAt,
     )
 
@@ -77,6 +77,10 @@ export async function startSession(userId: string) {
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
     path: '/',
+    // Host-only cookies are not shared across www/non-www. Set the domain so a
+    // session started on one host is valid on the other (nginx canonicalizes
+    // to non-www, but this guards against any edge case).
+    domain: process.env.NODE_ENV === 'production' ? 'sriprayagclasses.in' : undefined,
     expires,
   })
 }

@@ -174,6 +174,46 @@ const migrations: Migration[] = [
       create index password_resets_user on password_resets(user_id);
     `,
   },
+  {
+    name: '003_otp_codes',
+    sql: /* sql */ `
+      -- One-time passcodes for email verification during signup, signin and
+      -- password reset. Codes are 6-digit numeric, single use and expire after
+      -- 10 minutes. attempts tracks failed verification for rate limiting.
+      create table otp_codes (
+        id         text primary key,
+        email      text not null,
+        code       text not null,
+        purpose    text not null,
+        expires_at text not null,
+        used_at    text,
+        attempts   integer not null default 0
+      );
+      create index otp_codes_email on otp_codes(email);
+      create index otp_codes_expires on otp_codes(expires_at);
+    `,
+  },
+  {
+    name: '004_pending_auth',
+    sql: /* sql */ `
+      -- Temporary state for multi-page auth flows (signup / signin).
+      -- Stores name, email, otp purpose and a one-time token so data survives
+      -- page-to-page navigation without exposing secrets in URLs.
+      create table pending_auth (
+        id         text primary key,
+        kind       text not null,   -- 'signup' | 'signin'
+        email      text,
+        name       text,
+        otp_code   text,
+        otp_sent   integer not null default 0,
+        token      text not null unique,
+        expires_at text not null,
+        created_at text not null
+      );
+      create index pending_auth_token on pending_auth(token);
+      create index pending_auth_expires on pending_auth(expires_at);
+    `,
+  },
 ]
 
 function migrate(conn: DatabaseSync) {
