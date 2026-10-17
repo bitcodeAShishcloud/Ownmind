@@ -15,9 +15,8 @@ import {
   sendOtpCode,
   verifyOtpCode,
   invalidateOtps,
-  type OtpPurpose,
 } from '@/lib/otp'
-import { generateCaptcha, verifyCaptcha } from '@/lib/captcha'
+import { verifyCaptcha } from '@/lib/captcha'
 
 export type AuthState = {
   error?: string
@@ -35,26 +34,8 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]{2,}$/
 const MIN_PASSWORD = 10
 const PENDING_TTL_MINUTES = 30
 
-function validateEmail(email: string, password: string, name?: string): AuthState | null {
-  const fieldErrors: NonNullable<AuthState['fieldErrors']> = {}
-
-  if (!email) fieldErrors.email = 'Enter your email address.'
-  else if (!EMAIL_PATTERN.test(email)) fieldErrors.email = 'That does not look like an email address.'
-
-  if (!password) fieldErrors.password = 'Enter a password.'
-  else if (password.length < MIN_PASSWORD) {
-    fieldErrors.password = `Use at least ${MIN_PASSWORD} characters.`
-  }
-
-  if (name !== undefined && !name.trim()) {
-    fieldErrors.name = 'Enter a name, or leave it blank to use your email.'
-  }
-
-  return Object.keys(fieldErrors).length > 0 ? { fieldErrors } : null
-}
-
 /* -------------------------------------------------------------------------- */
-/* Signup: Page 1 — Name + CAPTCHA                                            */
+/* Signup: Page 1 — Name + CAPTCHA → redirect to email page                   */
 /* -------------------------------------------------------------------------- */
 
 export async function signupStep1(
@@ -73,14 +54,16 @@ export async function signupStep1(
   const createdAt = nowIso()
   const expiresAt = new Date(Date.now() + PENDING_TTL_MINUTES * 60_000).toISOString()
 
+  prunePendingAuth()
+
   db()
     .prepare(
       `insert into pending_auth (id, kind, email, name, otp_code, otp_sent, token, expires_at, created_at)
        values (?, 'signup', null, ?, null, 0, ?, ?, ?)`,
     )
-    .run(token, name, token, expiresAt, createdAt)
+    .run(token, name ?? null, token, expiresAt, createdAt)
 
-  return { sent: true } as unknown as AuthState
+  redirect(`/signup/email?token=${token}`)
 }
 
 /* -------------------------------------------------------------------------- */
@@ -107,18 +90,21 @@ export async function signupStep2(
     return { error: 'Session expired. Please start over.' }
   }
 
-  // Verify OTP if one was already sent for this email/purpose
+  // If OTP code was submitted, verify it (without marking as used yet — that
+  // happens in step 3 when the account is created) and redirect to password page
   if (otpCode) {
-    if (!verifyOtpCode(email, otpCode, 'signup')) {
+    const row = db()
+      .prepare(
+        `select * from otp_codes
+         where email = ? and purpose = ? and used_at is null and expires_at > ?
+         limit 1`,
+      )
+      .get(email, 'signup', nowIso()) as { code: string } | undefined
+
+    if (!row || row.code !== otpCode) {
       return { error: 'Invalid or expired code. Request a new one.' }
     }
-    invalidateOtps(email, 'signup')
-    db()
-      .prepare(
-        `update pending_auth set email = ?, otp_code = null, otp_sent = 1 where id = ?`,
-      )
-      .run(email, pending.id)
-    return { sent: true } as unknown as AuthState
+    redirect(`/signup/password?token=${token}`)
   }
 
   // First time on this page: generate and send OTP
@@ -180,7 +166,7 @@ export async function signupStep3(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Signin: Page 1 — Email + CAPTCHA → send OTP                                */
+/* Signin: Page 1 — Email + CAPTCHA → send OTP → redirect to verify page      */
 /* -------------------------------------------------------------------------- */
 
 export async function signinStep1(
@@ -203,6 +189,8 @@ export async function signinStep1(
   const createdAt = nowIso()
   const expiresAt = new Date(Date.now() + PENDING_TTL_MINUTES * 60_000).toISOString()
 
+  prunePendingAuth()
+
   db()
     .prepare(
       `insert into pending_auth (id, kind, email, name, otp_code, otp_sent, token, expires_at, created_at)
@@ -213,7 +201,7 @@ export async function signinStep1(
   const code = createOtpCode(email, 'signin')
   await sendOtpCode(email, code, 'signin')
 
-  return { sent: true } as unknown as AuthState
+  redirect(`/signin/verify?token=${token}`)
 }
 
 /* -------------------------------------------------------------------------- */
@@ -273,11 +261,11 @@ export async function signOut() {
 /* Helpers                                                                    */
 /* -------------------------------------------------------------------------- */
 
-export async function generateCaptchaAction() {
-  return generateCaptcha()
-}
-
-/** Prune expired pending_auth rows. Call periodically. */
-export function prunePendingAuth(): void {
+/**
+ * Drop rows for attempts that were never finished. Every new flow clears the
+ * slate, so the table stays the size of the last half hour rather than growing
+ * for as long as the site is up.
+ */
+function prunePendingAuth(): void {
   db().prepare(`delete from pending_auth where expires_at <= ?`).run(nowIso())
 }

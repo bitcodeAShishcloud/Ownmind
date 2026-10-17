@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState, useRef, useState } from 'react'
+import { useActionState, useState } from 'react'
 import Link from 'next/link'
 import type { AuthState } from '@/lib/actions/auth'
 
@@ -29,19 +29,19 @@ export function AuthForm({
   token?: string
 }) {
   const [state, formAction, pending] = useActionState(action, initial)
-  const [step, setStep] = useState<Step>(initialStep ?? 'name')
-  const [captcha, setCaptcha] = useState<{ question: string; token: string; answer: number } | null>(initialCaptcha ?? null)
-  const prevSent = useRef(false)
+  const [captcha] = useState<{ question: string; token: string; answer: number } | null>(initialCaptcha ?? null)
+  const step: Step = initialStep ?? 'name'
   const isSignUp = mode === 'signup'
 
-  // When OTP is sent successfully, move to next step.
-  // eslint-disable-next-line react-hooks/refs
-  if (state.sent && !prevSent.current) {
-    prevSent.current = true
-    if (step === 'email') {
-      setStep('otp')
-    }
-  }
+  /**
+   * Re-entering the email page is how someone asks for another code. Going back
+   * to it resets the sent state, so the email field comes back with the form
+   * bound to the action that actually sends codes.
+   */
+  const backToEmail = `/signup/email?token=${token ?? ''}`
+
+  // For signup email step: after OTP is sent, show OTP field on same page
+  const showOtp = isSignUp && step === 'email' && state.sent
 
   return (
     <form action={formAction} className="flex flex-col gap-4" noValidate>
@@ -67,7 +67,7 @@ export function AuthForm({
       {token ? <input type="hidden" name="token" value={token} /> : null}
 
       {/* ------------------------------------------------------------------ */}
-      {/* Signup Page 1: Name + CAPTCHA                                      */}
+      {/* Signup Page 1: Name + CAPTCHA (server redirects to email page)      */}
       {/* ------------------------------------------------------------------ */}
       {isSignUp && step === 'name' ? (
         <>
@@ -109,9 +109,9 @@ export function AuthForm({
       ) : null}
 
       {/* ------------------------------------------------------------------ */}
-      {/* Signup Page 2: Email (+ OTP auto-sent on load)                     */}
+      {/* Signup Page 2a: Email + Send OTP                                    */}
       {/* ------------------------------------------------------------------ */}
-      {isSignUp && step === 'email' ? (
+      {isSignUp && step === 'email' && !showOtp ? (
         <>
           <Field
             label="Email"
@@ -135,9 +135,9 @@ export function AuthForm({
       ) : null}
 
       {/* ------------------------------------------------------------------ */}
-      {/* Signup Page 2b: OTP verification (after code sent)                  */}
+      {/* Signup Page 2b: OTP verification (shown after code sent)            */}
       {/* ------------------------------------------------------------------ */}
-      {isSignUp && step === 'otp' ? (
+      {isSignUp && showOtp ? (
         <>
           <Field
             label="Email"
@@ -169,18 +169,17 @@ export function AuthForm({
             {pending ? 'Verifying' : 'Verify code'}
           </button>
 
-          <button
-            type="button"
-            onClick={() => setStep('email')}
+          <Link
+            href={backToEmail}
             className="btn btn-ghost mt-1 w-full text-sm"
           >
-            Request a new code
-          </button>
+            Use a different email
+          </Link>
         </>
       ) : null}
 
       {/* ------------------------------------------------------------------ */}
-      {/* Signup Page 3: Password + OTP verify                                */}
+      {/* Signup Page 3: Password + OTP verify → create account               */}
       {/* ------------------------------------------------------------------ */}
       {isSignUp && step === 'password' ? (
         <>
@@ -214,18 +213,17 @@ export function AuthForm({
             {pending ? 'Creating account' : 'Create account'}
           </button>
 
-          <button
-            type="button"
-            onClick={() => setStep('email')}
+          <Link
+            href={backToEmail}
             className="btn btn-ghost mt-1 w-full text-sm"
           >
             Request a new code
-          </button>
+          </Link>
         </>
       ) : null}
 
       {/* ------------------------------------------------------------------ */}
-      {/* Signin Page 1: Email + CAPTCHA                                      */}
+      {/* Signin Page 1: Email + CAPTCHA (server redirects to verify page)    */}
       {/* ------------------------------------------------------------------ */}
       {!isSignUp && step === 'name' ? (
         <>
@@ -311,13 +309,12 @@ export function AuthForm({
             {pending ? 'Signing in' : 'Sign in'}
           </button>
 
-          <button
-            type="button"
-            onClick={() => setStep('name')}
+          <Link
+            href="/signin"
             className="btn btn-ghost mt-1 w-full text-sm"
           >
             Request a new code
-          </button>
+          </Link>
         </>
       ) : null}
 

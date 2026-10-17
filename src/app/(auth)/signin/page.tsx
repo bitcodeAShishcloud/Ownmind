@@ -1,12 +1,11 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/session'
 import { AuthForm } from '@/components/auth-form'
-import { authAction } from '@/lib/actions/auth'
+import { signinStep1 } from '@/lib/actions/auth'
 import { generateCaptcha } from '@/lib/captcha'
 
 /**
- * The public pages never read the session, so this page does the check instead.
- * Someone already signed in who lands here goes straight to their library.
+ * Signin page 1 of 2: Email + CAPTCHA → auto-send OTP.
  */
 export default async function SignInPage({ searchParams }: PageProps<'/signin'>) {
   if (await getCurrentUser()) redirect('/library')
@@ -22,7 +21,7 @@ export default async function SignInPage({ searchParams }: PageProps<'/signin'>)
       <p className="mt-1.5 mb-6 text-sm text-muted">Pick up where you left off.</p>
       <AuthForm
         mode="signin"
-        action={authAction}
+        action={signinStep1}
         notice={justReset ? 'Password changed. Sign in with the new one.' : undefined}
         captcha={captcha}
       />

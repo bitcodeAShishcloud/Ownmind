@@ -10,7 +10,8 @@ import { signupStep2 } from '@/lib/actions/auth'
 export default async function SignUpEmailPage({ searchParams }: PageProps<'/signup/email'>) {
   if (await getCurrentUser()) redirect('/library')
 
-  const token = typeof searchParams.token === 'string' ? searchParams.token : ''
+  const params = await searchParams
+  const token = typeof params.token === 'string' ? params.token : ''
 
   if (!token) {
     redirect('/signup')

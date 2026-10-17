@@ -7,7 +7,7 @@ import { generateCaptcha } from '@/lib/captcha'
 /**
  * Signup page 1 of 3: Name + CAPTCHA.
  */
-export default async function SignUpPage({ searchParams }: PageProps<'/signup'>) {
+export default async function SignUpPage() {
   if (await getCurrentUser()) redirect('/library')
 
   const captcha = generateCaptcha()
