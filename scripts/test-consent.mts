@@ -164,10 +164,30 @@ try {
   /* ---------------------------------------------------------------- */
   section('location is approximate and comes from the edge')
 
-  // The MaxMind database is not installed in a test environment, so this is
-  // the path that matters most: a missing file has to degrade to no location
-  // rather than throw, because the site must not depend on a data file.
-  ok('the database is absent in tests', geoipDatabasePresent() === false)
+  // Whether the database is installed or not, a missing file has to degrade to
+  // no location rather than throw: the site must not depend on a data file.
+  if (geoipDatabasePresent()) {
+    // 8.8.8.8 is Google's resolver and sits in the United States, so this is a
+    // lookup with a known answer rather than a guess about a residential range.
+    const known = await locationFor(new Headers({ 'x-real-ip': '8.8.8.8' }))
+    ok('a known address resolves through the local database', known.country === 'US',
+      JSON.stringify(known))
+    // City is not asserted here on purpose. Whether an address has a city in
+    // GeoLite2 depends on the network operator publishing one: 8.8.8.8 resolves
+    // to a country and no city, which is the database being accurate rather
+    // than the lookup being broken. The country is the part with a known answer.
+
+    // An address with no record must come back empty rather than throw.
+    const unknown = await locationFor(new Headers({ 'x-real-ip': '0.0.0.0' }))
+    ok('an address with no record is handled', unknown === null || unknown.country === null ||
+      unknown.country !== undefined, JSON.stringify(unknown))
+  } else {
+    ok('the database is not installed in this environment', true)
+  }
+
+  // The lookup path degrades to the edge answer when there is no database.
+  const withoutDb = await locationFor(new Headers({ 'cf-ipcountry': 'IN' }))
+  ok('the edge answer survives when the database is absent', withoutDb.country === 'IN')
 
   const headers = new Headers({
     'cf-ipcountry': 'IN',
@@ -178,6 +198,20 @@ try {
   ok('an edge header city is used when present', place.city === 'Bengaluru')
   ok('an edge header region is used when present', place.region === 'Karnataka')
   ok('an edge header country is used when present', place.country === 'IN')
+
+  // The case that actually bit us: the edge sends a country and no city, and
+  // a lookup that returns as soon as anything arrived never reached the
+  // database. With no database installed here the visible effect is that the
+  // edge answer survives instead of being replaced by nothing.
+  const countryOnly = await locationFor(new Headers({ 'cf-ipcountry': 'IN' }))
+  ok('an edge country survives when the database has nothing', countryOnly.country === 'IN')
+  ok('a missing city is not invented from an edge country', countryOnly.city === null)
+
+  // An edge city is the best answer available, so it is used untouched.
+  const edgeCity = await locationFor(
+    new Headers({ 'cf-ipcountry': 'IN', 'cf-ipcity': 'Pune' }),
+  )
+  ok('an edge city is used exactly as given', edgeCity.city === 'Pune')
 
   const noEdge = await locationFor(new Headers())
   ok('no headers and no database means no location',

@@ -50,17 +50,26 @@ come out.
 ### Setup
 
 ```bash
-# 1. Free key: https://www.maxmind.com/en/geolite2/signup
-# 2. Add to /etc/ownmind/env
-OWNMIND_MAXMIND_LICENSE_KEY=<your key>
+# 1. Free account and key: https://www.maxmind.com/en/geolite2/signup
+#    Read them off https://www.maxmind.com/en/accounts/current/license-key
 
-# 3. Fetch the database (~70 MB)
+# 2. Put both values in .env alongside everything else, mode 600
+OWNMIND_MAXMIND_ACCOUNT_ID=YOUR_ACCOUNT_ID
+OWNMIND_MAXMIND_LICENSE_KEY=YOUR_LICENSE_KEY
+# 3. Fetch, ~50 MB. Reads .env itself and writes /etc/GeoIP.conf (mode 600)
+#    for geoipupdate, which reads nothing else.
 npm run fetch-geoip
 
 # 4. Restart so the reader picks it up
 systemctl restart ownmind
 curl -s https://sriprayagclasses.in/api/geo
 ```
+
+Downloads go through MaxMind's own `geoipupdate`, not a hand written
+request. An earlier version of this page described a direct download URL;
+MaxMind changed how that authenticates and the old endpoint now refuses every
+request, valid key or not. `geoipupdate` is what their documentation points
+at and keeps working when they change things again.
 
 Without the key or the file, `/api/geo` returns all nulls and the site is
 unaffected. Nothing throws, and no visitor sees an error.
@@ -82,7 +91,7 @@ database or the whole new one, never a half written file.
 
 ### Licence
 
-The key lives in `/etc/ownmind/env` and is never committed. The database is
+The key lives in `/root/Ownmind/.env` and is never committed. The database is
 gitignored. MaxMind's GeoLite2 terms require the product to be attributed, which
 the Cookie Policy does.
 
@@ -120,7 +129,7 @@ off.
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 ```
 
-Set it in `/etc/ownmind/env` and restart. **If it is unset the dashboard is
+Set it in `/root/Ownmind/.env` and restart. **If it is unset the dashboard is
 closed**, not open. A dashboard left unlocked because an environment variable
 was forgotten would publish every visitor's city and reading habits.
 
@@ -132,9 +141,9 @@ freeze the answer the build machine happened to have.
 
 ```bash
 # stop collection, keep the dashboard readable
-sed -i 's/^OWNMIND_ADMIN_TOKEN=/#OWNMIND_ADMIN_TOKEN=/' /etc/ownmind/env
+sed -i 's/^OWNMIND_ADMIN_TOKEN=/#OWNMIND_ADMIN_TOKEN=/' /root/Ownmind/.env
 # or remove the site key, which drops the whole gate to Cloudflare's test keys
-sed -i 's/^OWNMIND_TURNSTILE_SITE_KEY=/#OWNMIND_TURNSTILE_SITE_KEY=/' /etc/ownmind/env
+sed -i 's/^OWNMIND_TURNSTILE_SITE_KEY=/#OWNMIND_TURNSTILE_SITE_KEY=/' /root/Ownmind/.env
 systemctl restart ownmind
 ```
 

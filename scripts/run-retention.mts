@@ -9,6 +9,13 @@
  * Scheduled by ownmind-retention.timer. Manual: npm run retention
  */
 
+const { loadEnv } = await import('./load-env.mts')
+
+// Without this, a run from a shell has no OWNMIND_DATA_DIR and would open a
+// database in the project directory instead of the real one, deleting nothing
+// and reporting success.
+loadEnv()
+
 const { runRetention } = await import('../src/lib/retention.ts')
 
 const result = runRetention()

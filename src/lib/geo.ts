@@ -102,8 +102,13 @@ function clean(value: unknown, pattern: RegExp): string | null {
 }
 
 /**
- * Look the address up. Cloudflare's headers are consulted first and act as a
- * fallback, so the category keeps working if the proxy is ever switched on.
+ * Look the address up.
+ *
+ * Cloudflare's headers are consulted first, but only for the city. The free
+ * plan reliably sends a country and no city, so returning as soon as anything
+ * arrived would mean the database never got asked. Anything the edge did not
+ * answer is filled from GeoLite2, and anything GeoLite2 does not know falls
+ * back to what the edge did say.
  */
 export async function locationFor(headers: Headers): Promise<ApproximateLocation> {
   const fromEdge: ApproximateLocation = {
@@ -111,29 +116,32 @@ export async function locationFor(headers: Headers): Promise<ApproximateLocation
     region: clean(headers.get('cf-region'), REGION_RE),
     country: clean(headers.get('cf-ipcountry'), COUNTRY_RE),
   }
-  if (fromEdge.city || fromEdge.country) return fromEdge
+
+  // The edge named a city, so there is nothing left for the database to add.
+  if (fromEdge.city) return fromEdge
 
   const ip = callerIp(headers)
-  if (!ip) return NO_LOCATION
+  if (!ip) return fromEdge
 
   const db = await loadReader()
-  if (!db) return NO_LOCATION
+  if (!db) return fromEdge
 
   try {
     const hit = db.get(ip)
-    if (!hit) return NO_LOCATION
+    if (!hit) return fromEdge
 
     // CityResponse.subdivisions is the region hierarchy, most specific first.
     const subdivisions = hit.subdivisions
 
     return {
       city: clean(hit.city?.names?.en, CITY_RE),
-      region: clean(subdivisions?.[0]?.names?.en, REGION_RE),
-      country: clean(hit.country?.iso_code, COUNTRY_RE),
+      region: clean(subdivisions?.[0]?.names?.en, REGION_RE) ?? fromEdge.region,
+      country: clean(hit.country?.iso_code, COUNTRY_RE) ?? fromEdge.country,
     }
   } catch {
-    // A malformed address or an unreadable record. No location is the answer.
-    return NO_LOCATION
+    // A malformed address or an unreadable record. Whatever the edge said is
+    // still true, so it is kept rather than thrown away.
+    return fromEdge
   }
 }
 
