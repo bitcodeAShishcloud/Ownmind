@@ -16,6 +16,8 @@ import { sendEmail, isMailConfigured, logResetLink } from './mail'
 const OTP_LENGTH = 6
 const OTP_EXPIRY_MINUTES = 10
 const MAX_ATTEMPTS = 5
+const MAX_SEND_PER_EMAIL_PER_HOUR = 5
+const MAX_SEND_PER_CALLER_PER_HOUR = 10
 
 export type OtpPurpose = 'signup' | 'signin' | 'password_reset'
 
@@ -164,4 +166,56 @@ export async function requestOtp(
   const code = createOtpCode(email, purpose)
   const sent = await sendOtpCode(email, code, purpose)
   return { code, sent }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Rate limiting                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Check if the rate limit has been exceeded for a given target.
+ * Returns true if the request is allowed, false if it should be blocked.
+ */
+function isAllowed(targetType: 'email' | 'caller', target: string, maxPerHour: number): boolean {
+  const oneHourAgo = new Date(Date.now() - 3_600_000).toISOString()
+
+  const count = db()
+    .prepare(
+      `select count(*) as count from otp_rate_limits
+       where target_type = ? and target = ? and created_at > ?`,
+    )
+    .get(targetType, target, oneHourAgo) as { count: number }
+
+  return count.count < maxPerHour
+}
+
+/** Record a rate limit hit for the given target. */
+function recordHit(targetType: 'email' | 'caller', target: string): void {
+  db()
+    .prepare(
+      `insert into otp_rate_limits (id, target_type, target, created_at)
+       values (?, ?, ?, ?)`,
+    )
+    .run(newId(), targetType, target, nowIso())
+}
+
+/**
+ * Check if sending an OTP to the given email is allowed by rate limits.
+ * Caller identifier is typically an IP address or session token.
+ */
+export function canSendOtp(email: string, callerId: string): boolean {
+  return isAllowed('email', email, MAX_SEND_PER_EMAIL_PER_HOUR) &&
+    isAllowed('caller', callerId, MAX_SEND_PER_CALLER_PER_HOUR)
+}
+
+/** Record that an OTP was sent. Call this after a successful send. */
+export function recordOtpSend(email: string, callerId: string): void {
+  recordHit('email', email)
+  recordHit('caller', callerId)
+}
+
+/** Housekeeping: delete old rate limit records. */
+export function pruneRateLimits(): void {
+  const oneHourAgo = new Date(Date.now() - 3_600_000).toISOString()
+  db().prepare('delete from otp_rate_limits where created_at <= ?').run(oneHourAgo)
 }

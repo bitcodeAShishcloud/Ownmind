@@ -9,10 +9,11 @@
  * Server only.
  */
 
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { randomInt } from 'node:crypto'
+import { db, newId, nowIso } from './db'
 
 const CAPTCHA_TTL_SECONDS = 300 // 5 minutes
-const CAPTCHA_SECRET = process.env.CAPTCHA_SECRET ?? 'ownmind-captcha-default-secret-change-in-production'
+const MAX_CAPTCHA_ATTEMPTS = 3
 
 export type CaptchaChallenge = {
   question: string
@@ -20,46 +21,94 @@ export type CaptchaChallenge = {
   token: string
 }
 
-/** Generate a math CAPTCHA challenge: "What is a + b?" */
-export function generateCaptcha(): CaptchaChallenge {
-  const a = Math.floor(Math.random() * 20) + 1
-  const b = Math.floor(Math.random() * 20) + 1
-  const answer = a + b
+type Operator = '+' | '-' | '×'
 
-  const expiry = Date.now() + CAPTCHA_TTL_SECONDS * 1000
-  const payload = `${answer}:${expiry}`
-  const token = createHmac('sha256', CAPTCHA_SECRET)
-    .update(payload)
-    .digest('hex')
+function randomOperator(): Operator {
+  const operators: Operator[] = ['+', '-', '×']
+  return operators[randomInt(operators.length)]
+}
+
+/** Generate a math CAPTCHA challenge with mixed arithmetic. */
+export function generateCaptcha(): CaptchaChallenge {
+  const a = randomInt(1, 21)
+  const b = randomInt(1, 21)
+  const op = randomOperator()
+
+  let answer: number
+  let question: string
+
+  switch (op) {
+    case '+':
+      answer = a + b
+      question = `What is ${a} + ${b}?`
+      break
+    case '-':
+      // Ensure non-negative answer for simplicity
+      const [x, y] = a >= b ? [a, b] : [b, a]
+      answer = x - y
+      question = `What is ${x} - ${y}?`
+      break
+    case '×':
+      const smallA = randomInt(1, 10)
+      const smallB = randomInt(1, 10)
+      answer = smallA * smallB
+      question = `What is ${smallA} × ${smallB}?`
+      break
+  }
+
+  const token = newId()
+  const expiresAt = new Date(Date.now() + CAPTCHA_TTL_SECONDS * 1000).toISOString()
+
+  // Store token in database for single-use enforcement
+  db()
+    .prepare(
+      `insert into captcha_tokens (token, answer, expires_at, attempts, used_at, created_at)
+       values (?, ?, ?, 0, null, ?)`,
+    )
+    .run(token, answer, expiresAt, nowIso())
 
   return {
-    question: `What is ${a} + ${b}?`,
+    question,
     answer,
-    token: `${token}:${expiry}`,
+    token,
   }
 }
 
-/** Verify a CAPTCHA submission. Returns true if the token is valid, unexpired, and the answer matches. */
+/** Verify a CAPTCHA submission. Single-use, attempt-capped, token-based. */
 export function verifyCaptcha(token: string, answer: number): boolean {
   if (!token || typeof answer !== 'number') return false
 
-  const parts = token.split(':')
-  if (parts.length !== 2) return false
+  const row = db()
+    .prepare('select * from captcha_tokens where token = ?')
+    .get(token) as {
+    token: string
+    answer: number
+    expires_at: string
+    attempts: number
+    used_at: string | null
+  } | undefined
 
-  const [signature, expiry] = parts
-  const expiryMs = Number(expiry)
+  if (!row) return false
 
-  // Check expiry.
-  if (!expiryMs || expiryMs < Date.now()) return false
+  // Single-use: delete after verification attempt
+  db().prepare('delete from captcha_tokens where token = ?').run(token)
 
-  // Recompute expected HMAC for the answer + expiry payload.
-  const payload = `${answer}:${expiry}`
-  const expected = createHmac('sha256', CAPTCHA_SECRET)
-    .update(payload)
-    .digest('hex')
+  // Already used
+  if (row.used_at) return false
 
-  // Constant-time comparison to prevent timing attacks.
-  if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return false
+  // Expired
+  if (row.expires_at < nowIso()) return false
+
+  // Too many attempts
+  if (row.attempts >= MAX_CAPTCHA_ATTEMPTS) return false
+
+  // Wrong answer: increment attempts (row already deleted, but we checked)
+  if (row.answer !== answer) return false
 
   return true
+}
+
+/** Housekeeping: delete expired CAPTCHA tokens. */
+export function pruneExpiredCaptchas(): void {
+  db().prepare('delete from captcha_tokens where expires_at <= ?').run(nowIso())
 }

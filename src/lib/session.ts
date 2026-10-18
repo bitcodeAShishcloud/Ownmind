@@ -16,6 +16,9 @@ import { redirect } from 'next/navigation'
 const SESSION_COOKIE = 'ownmind_session'
 const SESSION_DAYS = 30
 
+const PENDING_AUTH_COOKIE = 'ownmind_pending_auth'
+const PENDING_AUTH_TTL_HOURS = 1
+
 // Re-exported so server actions have one obvious import for auth concerns.
 export { hashPassword, verifyPassword, isAcceptablePassword } from './password'
 
@@ -123,4 +126,30 @@ export async function requireUser(returnTo?: string): Promise<User> {
 /** Housekeeping. Expired rows are cheap to drop but pointless to accumulate. */
 export function pruneExpiredSessions() {
   db().prepare('delete from sessions where expires_at <= ?').run(nowIso())
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pending auth cookie                                                         */
+/* -------------------------------------------------------------------------- */
+
+export async function setPendingAuthCookie(token: string) {
+  const expires = new Date(Date.now() + PENDING_AUTH_TTL_HOURS * 3_600_000)
+  const jar = await cookies()
+  jar.set(PENDING_AUTH_COOKIE, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    expires,
+  })
+}
+
+export async function getPendingAuthToken(): Promise<string | null> {
+  const jar = await cookies()
+  return jar.get(PENDING_AUTH_COOKIE)?.value ?? null
+}
+
+export async function clearPendingAuthCookie() {
+  const jar = await cookies()
+  jar.delete(PENDING_AUTH_COOKIE)
 }

@@ -214,6 +214,37 @@ const migrations: Migration[] = [
       create index pending_auth_expires on pending_auth(expires_at);
     `,
   },
+  {
+    name: '005_otp_rate_limits',
+    sql: /* sql */ `
+      -- Rate limiting for OTP send requests. Tracks requests per email and
+      -- per caller to prevent abuse (sending unlimited codes to victims).
+      create table otp_rate_limits (
+        id          text primary key,
+        target_type text not null,  -- 'email' | 'caller'
+        target      text not null,  -- email address or caller identifier
+        created_at  text not null
+      );
+      create index otp_rate_limits_target on otp_rate_limits(target_type, target, created_at);
+      create index otp_rate_limits_created on otp_rate_limits(created_at);
+    `,
+  },
+  {
+    name: '006_captcha_tokens',
+    sql: /* sql */ `
+      -- Single-use CAPTCHA tokens. Each token is stored in the database and
+      -- deleted after verification to prevent replay attacks.
+      create table captcha_tokens (
+        token      text primary key,
+        answer     integer not null,
+        expires_at text not null,
+        attempts   integer not null default 0,
+        used_at    text,
+        created_at text not null
+      );
+      create index captcha_tokens_expires on captcha_tokens(expires_at);
+    `,
+  },
 ]
 
 function migrate(conn: DatabaseSync) {

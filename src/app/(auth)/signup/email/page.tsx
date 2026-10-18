@@ -1,34 +1,19 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/session'
 import { AuthForm } from '@/components/auth-form'
-import { signupStep2 } from '@/lib/actions/auth'
+import { signupSendCode, signupVerifyCode } from '@/lib/actions/auth'
 
-/**
- * Signup page 2 of 3: Email + OTP.
- * OTP is auto-sent when the page loads (via the server action's first render).
- */
-export default async function SignUpEmailPage({ searchParams }: PageProps<'/signup/email'>) {
+/** Sign up, page 2 of 3: the address and the code sent to it. Both on one screen. */
+export default async function SignUpEmailPage() {
   if (await getCurrentUser()) redirect('/library')
-
-  const params = await searchParams
-  const token = typeof params.token === 'string' ? params.token : ''
-
-  if (!token) {
-    redirect('/signup')
-  }
 
   return (
     <div>
-      <h1 className="text-2xl">Enter your email</h1>
+      <h1 className="text-2xl">Confirm your email</h1>
       <p className="mt-1.5 mb-6 text-sm text-muted">
-        We will send a 6-digit code to this address.
+        Send a code to your address, then type it below to carry on.
       </p>
-      <AuthForm
-        mode="signup"
-        action={signupStep2}
-        step="email"
-        token={token}
-      />
+      <AuthForm step="email" action={signupVerifyCode} sendAction={signupSendCode} />
     </div>
   )
 }

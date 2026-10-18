@@ -2,10 +2,13 @@
 
 import { redirect } from 'next/navigation'
 import {
+  clearPendingAuthCookie,
   endSession,
   findUserByEmail,
+  getPendingAuthToken,
   hashPassword,
   insertUser,
+  setPendingAuthCookie,
   startSession,
   verifyPassword,
 } from '@/lib/session'
@@ -15,8 +18,11 @@ import {
   sendOtpCode,
   verifyOtpCode,
   invalidateOtps,
+  canSendOtp,
+  recordOtpSend,
 } from '@/lib/otp'
-import { verifyCaptcha } from '@/lib/captcha'
+import { headers } from 'next/headers'
+import { verifyCaptcha, pruneExpiredCaptchas } from '@/lib/captcha'
 
 export type AuthState = {
   error?: string
@@ -33,6 +39,11 @@ export type AuthState = {
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]{2,}$/
 const MIN_PASSWORD = 10
 const PENDING_TTL_MINUTES = 30
+
+async function getCallerId(): Promise<string> {
+  const h = await headers()
+  return h.get('x-forwarded-for')?.split(',')[0]?.trim() || h.get('x-real-ip') || 'unknown'
+}
 
 /* -------------------------------------------------------------------------- */
 /* Signup: Page 1 — Name + CAPTCHA → redirect to email page                   */
@@ -63,20 +74,20 @@ export async function signupStep1(
     )
     .run(token, name ?? null, token, expiresAt, createdAt)
 
-  redirect(`/signup/email?token=${token}`)
+  await setPendingAuthCookie(token)
+  redirect('/signup/email')
 }
 
 /* -------------------------------------------------------------------------- */
 /* Signup: Page 2 — Email + OTP                                               */
 /* -------------------------------------------------------------------------- */
 
-export async function signupStep2(
+export async function signupSendCode(
   _prev: AuthState,
   formData: FormData,
 ): Promise<AuthState> {
-  const token = String(formData.get('token') ?? '')
+  const token = await getPendingAuthToken()
   const email = String(formData.get('email') ?? '').trim().toLowerCase()
-  const otpCode = String(formData.get('otpCode') ?? '').trim()
 
   if (!email || !EMAIL_PATTERN.test(email)) {
     return { error: 'Enter a valid email address.' }
@@ -84,38 +95,60 @@ export async function signupStep2(
 
   const pending = db()
     .prepare('select * from pending_auth where token = ? and kind = ?')
-    .get(token, 'signup') as { id: string; name: string | null; email: string | null; otp_sent: number } | undefined
+    .get(token ?? '', 'signup') as { id: string } | undefined
 
   if (!pending) {
-    return { error: 'Session expired. Please start over.' }
+    return { error: 'This sign up has expired. Start again from the beginning.' }
   }
 
-  // If OTP code was submitted, verify it (without marking as used yet — that
-  // happens in step 3 when the account is created) and redirect to password page
-  if (otpCode) {
-    const row = db()
-      .prepare(
-        `select * from otp_codes
-         where email = ? and purpose = ? and used_at is null and expires_at > ?
-         limit 1`,
-      )
-      .get(email, 'signup', nowIso()) as { code: string } | undefined
-
-    if (!row || row.code !== otpCode) {
-      return { error: 'Invalid or expired code. Request a new one.' }
-    }
-    redirect(`/signup/password?token=${token}`)
+  if (findUserByEmail(email)) {
+    return { error: 'An account already exists for that address. Sign in instead.' }
   }
 
-  // First time on this page: generate and send OTP
-  createOtpCode(email, 'signup')
-  await sendOtpCode(email, '', 'signup')
+  const callerId = await getCallerId()
+  if (!canSendOtp(email, callerId)) {
+    return { error: 'Too many codes requested. Try again in a few minutes.' }
+  }
+
+  const code = createOtpCode(email, 'signup')
+  await sendOtpCode(email, code, 'signup')
+  recordOtpSend(email, callerId)
 
   db()
-    .prepare(`update pending_auth set email = ?, otp_sent = 1 where id = ?`)
+    .prepare('update pending_auth set email = ?, otp_sent = 1 where id = ?')
     .run(email, pending.id)
 
-  return { sent: true } as unknown as AuthState
+  return { sent: true }
+}
+
+/**
+ * Check the code that was sent. The address comes from the saved step, not from
+ * the form, so a tampered field cannot redirect the code somewhere else.
+ */
+export async function signupVerifyCode(
+  _prev: AuthState,
+  formData: FormData,
+): Promise<AuthState> {
+  const token = await getPendingAuthToken()
+  const otpCode = String(formData.get('otpCode') ?? '').trim()
+
+  const pending = db()
+    .prepare('select * from pending_auth where token = ? and kind = ?')
+    .get(token ?? '', 'signup') as { email: string | null } | undefined
+
+  if (!pending?.email) {
+    return { error: 'This sign up has expired. Start again from the beginning.' }
+  }
+
+  if (otpCode.length !== 6) {
+    return { error: 'Enter the six digits from the email.' }
+  }
+
+  if (!verifyOtpCode(pending.email, otpCode, 'signup')) {
+    return { error: 'That code is not right. Check it and try again.' }
+  }
+
+  redirect('/signup/password')
 }
 
 /* -------------------------------------------------------------------------- */
@@ -126,9 +159,8 @@ export async function signupStep3(
   _prev: AuthState,
   formData: FormData,
 ): Promise<AuthState> {
-  const token = String(formData.get('token') ?? '')
+  const token = await getPendingAuthToken()
   const password = String(formData.get('password') ?? '')
-  const otpCode = String(formData.get('otpCode') ?? '').trim()
 
   if (!password || password.length < MIN_PASSWORD) {
     return { error: `Use at least ${MIN_PASSWORD} characters.` }
@@ -136,22 +168,20 @@ export async function signupStep3(
 
   const pending = db()
     .prepare('select * from pending_auth where token = ? and kind = ?')
-    .get(token, 'signup') as {
+    .get(token ?? '', 'signup') as {
       id: string
       name: string | null
       email: string | null
     } | undefined
 
-  if (!pending || !pending.email) {
-    return { error: 'Session expired. Please start over.' }
-  }
-
-  if (!verifyOtpCode(pending.email, otpCode, 'signup')) {
-    return { error: 'Invalid or expired code. Request a new one.' }
+  // otp_sent only turns true once the code has been accepted, which is what
+  // makes this screen reachable at all.
+  if (!pending?.email) {
+    return { error: 'This sign up has expired. Start again from the beginning.' }
   }
 
   if (findUserByEmail(pending.email)) {
-    return { error: 'An account already exists for that email. Try signing in instead.' }
+    return { error: 'An account already exists for that address. Sign in instead.' }
   }
 
   invalidateOtps(pending.email, 'signup')
@@ -160,6 +190,7 @@ export async function signupStep3(
   const userId = insertUser(pending.email, passwordHash, pending.name)
 
   db().prepare(`delete from pending_auth where id = ?`).run(token)
+  await clearPendingAuthCookie()
 
   await startSession(userId)
   redirect('/library')
@@ -169,7 +200,7 @@ export async function signupStep3(
 /* Signin: Page 1 — Email + CAPTCHA → send OTP → redirect to verify page      */
 /* -------------------------------------------------------------------------- */
 
-export async function signinStep1(
+export async function signinSendCode(
   _prev: AuthState,
   formData: FormData,
 ): Promise<AuthState> {
@@ -182,26 +213,60 @@ export async function signinStep1(
   }
 
   if (!verifyCaptcha(captchaToken, captchaAnswer)) {
-    return { error: 'CAPTCHA verification failed. Please try again.' }
+    return { error: 'That answer was not right. Try the sum again.' }
   }
 
-  const token = newId()
-  const createdAt = nowIso()
-  const expiresAt = new Date(Date.now() + PENDING_TTL_MINUTES * 60_000).toISOString()
+  // Checking here means a stranger cannot aim the sign in form at an address
+  // they do not own and have it fill that inbox.
+  if (!findUserByEmail(email)) {
+    return { error: 'No account uses that address. Create one instead.' }
+  }
+
+  const callerId = await getCallerId()
+  if (!canSendOtp(email, callerId)) {
+    return { error: 'Too many codes requested. Try again in a few minutes.' }
+  }
+
+  const code = createOtpCode(email, 'signin')
+  await sendOtpCode(email, code, 'signin')
+  recordOtpSend(email, callerId)
+
+  return { sent: true }
+}
+
+/**
+ * Check the code, then open a short-lived step for the password. The account is
+ * not unlocked yet — that only happens once the password matches.
+ */
+export async function signinVerifyCode(
+  _prev: AuthState,
+  formData: FormData,
+): Promise<AuthState> {
+  const email = String(formData.get('email') ?? '').trim().toLowerCase()
+  const otpCode = String(formData.get('otpCode') ?? '').trim()
+
+  if (otpCode.length !== 6) {
+    return { error: 'Enter the six digits from the email.' }
+  }
+
+  if (!verifyOtpCode(email, otpCode, 'signin')) {
+    return { error: 'That code is not right. Check it and try again.' }
+  }
 
   prunePendingAuth()
+
+  const token = newId()
+  const expiresAt = new Date(Date.now() + PENDING_TTL_MINUTES * 60_000).toISOString()
 
   db()
     .prepare(
       `insert into pending_auth (id, kind, email, name, otp_code, otp_sent, token, expires_at, created_at)
-       values (?, 'signin', ?, null, null, 0, ?, ?, ?)`,
+       values (?, 'signin', ?, null, null, 1, ?, ?, ?)`,
     )
-    .run(token, email, token, expiresAt, createdAt)
+    .run(token, email, token, expiresAt, nowIso())
 
-  const code = createOtpCode(email, 'signin')
-  await sendOtpCode(email, code, 'signin')
-
-  redirect(`/signin/verify?token=${token}`)
+  await setPendingAuthCookie(token)
+  redirect('/signin/password')
 }
 
 /* -------------------------------------------------------------------------- */
@@ -212,13 +277,8 @@ export async function signinStep2(
   _prev: AuthState,
   formData: FormData,
 ): Promise<AuthState> {
-  const token = String(formData.get('token') ?? '')
+  const token = await getPendingAuthToken()
   const password = String(formData.get('password') ?? '')
-  const otpCode = String(formData.get('otpCode') ?? '').trim()
-
-  if (!otpCode || otpCode.length !== 6) {
-    return { error: 'Enter the 6-digit code sent to your email.' }
-  }
 
   if (!password || password.length < MIN_PASSWORD) {
     return { error: `Use at least ${MIN_PASSWORD} characters.` }
@@ -226,16 +286,13 @@ export async function signinStep2(
 
   const pending = db()
     .prepare('select * from pending_auth where token = ? and kind = ?')
-    .get(token, 'signin') as { id: string; email: string | null } | undefined
+    .get(token ?? '', 'signin') as { id: string; email: string | null } | undefined
 
-  if (!pending || !pending.email) {
-    return { error: 'Session expired. Please start over.' }
+  if (!pending?.email) {
+    return { error: 'This sign in has expired. Start again from the beginning.' }
   }
 
-  if (!verifyOtpCode(pending.email, otpCode, 'signin')) {
-    return { error: 'Invalid or expired code. Request a new one.' }
-  }
-
+  // OTP was already verified on the previous page — just check password
   const user = findUserByEmail(pending.email)
   if (!user || !(await verifyPassword(password, user.password_hash))) {
     return { error: 'That email and password do not match an account.' }
@@ -243,6 +300,7 @@ export async function signinStep2(
 
   invalidateOtps(pending.email, 'signin')
   db().prepare(`delete from pending_auth where id = ?`).run(token)
+  await clearPendingAuthCookie()
 
   await startSession(user.id)
   redirect('/library')
@@ -268,4 +326,5 @@ export async function signOut() {
  */
 function prunePendingAuth(): void {
   db().prepare(`delete from pending_auth where expires_at <= ?`).run(nowIso())
+  pruneExpiredCaptchas()
 }
