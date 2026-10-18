@@ -29,12 +29,11 @@ export type DeviceInfo = {
   device_type: 'mobile' | 'desktop' | null
 }
 
+/** City, region and country. There is no coordinate field to fill in. */
 export type GeoInfo = {
   city: string | null
   region: string | null
   country: string | null
-  latitude: number | null
-  longitude: number | null
 }
 
 const TRACK_URL = '/api/track'
@@ -205,8 +204,6 @@ export async function collectLocation(): Promise<void> {
       city: body.city ?? null,
       region: body.region ?? null,
       country: body.country ?? null,
-      latitude: typeof body.latitude === 'number' ? body.latitude : null,
-      longitude: typeof body.longitude === 'number' ? body.longitude : null,
     }
     await send('location', { geo })
   } catch {

@@ -122,7 +122,7 @@ export const CATEGORY_COPY: Record<
     label: 'Location',
     short: 'Off by default',
     detail:
-      'Works out roughly which city and country the visit came from, using the network address the request already arrived on. Rounded to city level, never a street or a pin on a map.',
+      'Works out roughly which city and country the visit came from, using the network address the request already arrived on. City level only. No coordinate and no street.',
   },
   device: {
     label: 'Device info',

@@ -168,20 +168,32 @@ try {
     'cf-ipcountry': 'IN',
     'cf-region': 'Karnataka',
     'cf-ipcity': 'Bengaluru',
-    'cf-latitude': '12.9716',
-    'cf-longitude': '77.5946',
   })
   const place = locationFromHeaders(headers)
   ok('country is read from the header', place.country === 'IN')
   ok('city is read from the header', place.city === 'Bengaluru')
-  ok('coordinates are rounded to two places', place.latitude === 12.97 && place.longitude === 77.59)
+  ok('region is read from the header', place.region === 'Karnataka')
 
   const bare = locationFromHeaders(new Headers())
   ok('no edge headers means no location', bare.city === null && bare.country === null)
-  ok('the empty location is all nulls', bare.latitude === null && NO_LOCATION.latitude === null)
+  ok('the empty location is all nulls', bare.region === null && NO_LOCATION.city === null)
 
   const junk = locationFromHeaders(new Headers({ 'cf-ipcity': 'A'.repeat(500) }))
   ok('an over long city is dropped', junk.city === null)
+
+  // There is no coordinate anywhere in the type, so there is no coordinate to
+  // store, round or leak.
+  ok('the location has no latitude field', !('latitude' in place))
+  ok('the location has no longitude field', !('longitude' in place))
+  ok('the empty location has no coordinate fields',
+    !('latitude' in NO_LOCATION) && !('longitude' in NO_LOCATION))
+
+  const columns = (
+    db().prepare('pragma table_info(analytics_events)').all() as Array<{ name: string }>
+  ).map((c) => c.name)
+  ok('the table has no latitude column', !columns.includes('latitude'))
+  ok('the table has no longitude column', !columns.includes('longitude'))
+  ok('the table still has a city column', columns.includes('city'))
 
   /* ---------------------------------------------------------------- */
   section('writing')

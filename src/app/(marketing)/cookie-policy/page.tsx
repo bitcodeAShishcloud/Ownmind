@@ -179,10 +179,10 @@ export default function CookiePolicyPage() {
                 site even by accident.
               </p>
               <p>
-                Where coordinates are available they are rounded to two decimal
-                places, roughly a kilometre, before anything is stored. City,
-                region and country are stored. A street, a building, or a pin on
-                a map is not.
+                Only three values are stored: the country, the region and the city. No
+                latitude, no longitude, and no street. The database has no
+                column for a coordinate, so there is nowhere for one to be
+                kept even if it were offered.
               </p>
             </>
           ),

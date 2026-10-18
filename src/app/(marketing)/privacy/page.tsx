@@ -101,9 +101,9 @@ export default function PrivacyPage() {
                 </li>
                 <li>
                   <strong>Approximate location</strong>: country, region and
-                  city from network headers, plus coordinates rounded to about a
-                  kilometre where available. Collected under the location
-                  category.
+                  city from network headers. Nothing more precise is collected,
+                  and no coordinate is stored at all. Collected under the
+                  location category.
                 </li>
                 <li>
                   <strong>Device information</strong>: browser, version,
@@ -114,7 +114,12 @@ export default function PrivacyPage() {
 
               <h3>Never collected</h3>
               <ul>
-                <li>Exact GPS coordinates. The browser geolocation API is not used anywhere in this project.</li>
+                <li>
+                  Exact GPS coordinates. The browser geolocation API is not used
+                  anywhere in this project, and no latitude or longitude column
+                  exists in the database, so a position cannot be stored even by
+                  mistake.
+                </li>
                 <li>Keystrokes, or the contents of anything you type into a form.</li>
                 <li>Payment details. We never see them; card handling is out of scope.</li>
                 <li>Your name or email inside analytics. Those tables have no column to hold one.</li>

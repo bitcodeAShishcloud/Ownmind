@@ -340,6 +340,19 @@ const migrations: Migration[] = [
       create index deletion_requests_email on deletion_requests(email);
     `,
   },
+  {
+    name: '009_no_coordinates',
+    sql: /* sql */ `
+      -- Coordinates are removed entirely rather than merely left empty. Keeping
+      -- a column invites somebody to fill it in later, and the promise in the
+      -- cookie policy is that a position is not held, not that it is held and
+      -- rounded. Every row written so far had them null already, so nothing is
+      -- lost. City, region and country stay: those are the whole of the
+      -- location category now.
+      alter table analytics_events drop column latitude;
+      alter table analytics_events drop column longitude;
+    `,
+  },
 ]
 
 function migrate(conn: DatabaseSync) {
