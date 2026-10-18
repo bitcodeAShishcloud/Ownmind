@@ -52,7 +52,10 @@ export function Turnstile({
 }) {
   const host = useRef<HTMLDivElement>(null)
   const [token, setToken] = useState('')
-  const [failed, setFailed] = useState(false)
+  // Two different things go wrong here and a person fixes them differently.
+  // The script failing to arrive is a connection problem; the widget refusing
+  // is Cloudflare declining the visitor, and it offers its own retry.
+  const [failure, setFailure] = useState<'load' | 'verify' | ''>('')
 
   useEffect(() => {
     let cancelled = false
@@ -67,16 +70,16 @@ export function Turnstile({
           theme,
           callback: (value: string) => {
             setToken(value)
-            setFailed(false)
+            setFailure('')
           },
           'expired-callback': () => setToken(''),
           'error-callback': () => {
             setToken('')
-            setFailed(true)
+            setFailure('verify')
           },
         })
       })
-      .catch(() => setFailed(true))
+      .catch(() => setFailure('load'))
 
     return () => {
       cancelled = true
@@ -90,9 +93,11 @@ export function Turnstile({
     <div className="flex flex-col gap-1.5">
       <div ref={host} className="min-h-[65px]" />
       <input type="hidden" name="turnstileToken" value={token} />
-      {failed ? (
+      {failure ? (
         <p role="alert" className="text-sm text-accent-ink">
-          The challenge did not load. Check your connection and refresh.
+          {failure === 'load'
+            ? 'The challenge did not load. Check your connection and refresh.'
+            : 'Verification failed. Please try again, or refresh the page.'}
         </p>
       ) : null}
     </div>
