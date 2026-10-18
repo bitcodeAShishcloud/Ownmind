@@ -226,6 +226,19 @@ export async function signinSendCode(
   await sendOtpCode(email, code, 'signin')
   recordOtpSend(email, callerId)
 
+  // The code is typed into a form of its own, which holds no address, so the
+  // flow has to remember it here. Sign up does the same thing on page 1.
+  prunePendingAuth()
+  const token = newId()
+  const expiresAt = new Date(Date.now() + PENDING_TTL_MINUTES * 60_000).toISOString()
+  db()
+    .prepare(
+      `insert into pending_auth (id, kind, email, name, otp_code, otp_sent, token, expires_at, created_at)
+       values (?, 'signin', ?, null, null, 1, ?, ?, ?)`,
+    )
+    .run(token, email, token, expiresAt, nowIso())
+  await setPendingAuthCookie(token)
+
   return { sent: true }
 }
 
@@ -234,12 +247,20 @@ export async function signinVerifyCode(
   _prev: AuthState,
   formData: FormData,
 ): Promise<AuthState> {
-  const email = String(formData.get('email') ?? '').trim().toLowerCase()
   const otpCode = String(formData.get('otpCode') ?? '').trim()
 
   if (otpCode.length !== 6) {
     return { error: 'Enter the six digits from the email.' }
   }
+
+  // Read the address from the flow record rather than the form. The code is
+  // typed into a form of its own that carries no address, and a value the
+  // browser sends up is one the browser could have edited.
+  const pending = pendingFor(await getPendingAuthToken(), 'signin')
+  if (!pending?.email) {
+    return { error: 'This sign in has expired. Ask for a new code.' }
+  }
+  const email = pending.email
 
   const user = findUserByEmail(email)
 
@@ -250,6 +271,7 @@ export async function signinVerifyCode(
   }
 
   prunePendingAuth()
+  db().prepare('delete from pending_auth where id = ?').run(pending.id)
   await clearPendingAuthCookie()
 
   invalidateOtps(email, 'signin')
