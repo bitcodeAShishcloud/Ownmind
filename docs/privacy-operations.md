@@ -89,6 +89,37 @@ The download lands in a temporary directory and is renamed onto the live file.
 Rename on one filesystem is atomic, so a running reader sees the whole old
 database or the whole new one, never a half written file.
 
+### Rotating the key
+
+A newly generated key is not accepted by `geoipupdate` straight away. Right
+after rotating, expect:
+
+```
+401 {"code":"AUTHORIZATION_INVALID","error":"Your account ID or license key could not be authenticated."}
+```
+
+That is propagation delay, not a mistake, and it clears on its own in a few
+minutes. The obvious way to tell the difference: a direct `HEAD` against the
+documented download endpoint will return 200 for a key that `geoipupdate` is
+still refusing.
+
+```bash
+curl -o /dev/null -I -L -w '%{http_code}\n' \
+  -u "ACCOUNT_ID:THE_NEW_KEY" \
+  'https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz'
+```
+
+200 means the key is fine and only the update path has not caught up. Wait,
+then run `npm run fetch-geoip`.
+
+Two things to know about rotating:
+
+- Regenerating does **not** invalidate the previous key. Both work until the
+  old one is deleted, so removing it is a separate step.
+- Keep the previous key working until the new one has been proven with a real
+  download. The weekly job is the thing that breaks otherwise, and it fails
+  quietly once a week rather than loudly once.
+
 ### Licence
 
 The key lives in `/root/Ownmind/.env` and is never committed. The database is
