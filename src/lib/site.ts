@@ -14,6 +14,17 @@ export const site = {
   /** Shown in the footer. Replace with a real location before launch. */
   location: 'Remote, India',
   foundedYear: 2026,
+  /**
+   * Named in the privacy policy under section 8 of the DPDP Act, 2023. A
+   * grievance officer has to be a person a complaint can actually be sent to,
+   * so the name and the address go on the page rather than being implied.
+   */
+  grievanceOfficer: {
+    name: 'Ashish Gupta',
+    email: 'privacy@sriprayagclasses.in',
+  },
+  /** Bumped whenever the categories or their meaning change. */
+  consentVersion: '1.0',
 } as const
 
 export const heroCopy = {
@@ -33,5 +44,7 @@ export const navLinks = [
 
 export const legalLinks = [
   { href: '/privacy', label: 'Privacy Policy' },
+  { href: '/cookie-policy', label: 'Cookie Policy' },
+  { href: '/data-deletion', label: 'Delete my data' },
   { href: '/terms', label: 'Terms of Service' },
 ] as const

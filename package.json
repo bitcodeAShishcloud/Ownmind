@@ -9,11 +9,13 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "npm run test:data && npm run test:smoke && npm run test:auth && npm run test:design",
+    "test": "npm run test:data && npm run test:smoke && npm run test:auth && npm run test:design && npm run test:consent",
     "test:data": "tsx scripts/test-data.mts",
     "test:smoke": "node scripts/smoke.mjs",
     "test:auth": "tsx scripts/test-auth.mts",
     "test:design": "node scripts/audit-design.mjs",
+    "test:consent": "tsx scripts/test-consent.mts",
+    "retention": "tsx scripts/run-retention.mts",
     "favicon": "node scripts/make-favicon.mjs && node scripts/verify-favicon.mjs"
   },
   "dependencies": {

@@ -263,6 +263,83 @@ const migrations: Migration[] = [
       drop table if exists captcha_tokens;
     `,
   },
+  {
+    name: '008_consent_analytics',
+    sql: /* sql */ `
+      -- The proof of consent itself. Under section 5(2) of the DPDP Act a
+      -- controller has to demonstrate that consent was given, so this is kept
+      -- whether or not any other category was accepted. Deliberately carries no
+      -- identifier: a consent log row is not tied to a person or an account.
+      create table consent_logs (
+        id              text primary key,
+        consent_version text not null,
+        source          text not null,  -- banner_accept_all | banner_reject | modal_save
+        necessary       integer not null,
+        preferences     integer not null,
+        analytics       integer not null,
+        location        integer not null,
+        device          integer not null,
+        created_at      text not null,  -- when the person chose
+        last_seen_at    text not null   -- moves forward on every later choice
+      );
+      create index consent_logs_created on consent_logs(created_at desc);
+      create index consent_logs_seen on consent_logs(last_seen_at);
+
+      -- Everything collected about a visit. Every row here belongs to a
+      -- category the visitor switched on; the category is not stored per row
+      -- because the endpoint only ever writes a row for a granted category.
+      -- There is no column for an account, an email, or anything that could
+      -- identify a person, and session_id is new every session by design.
+      create table analytics_events (
+        id              text primary key,
+        type            text not null,  -- pageview | scroll_50 | outbound_click
+        session_id      text not null,
+        page_url        text,
+        page_path       text,
+        page_title      text,
+        referrer        text,
+        href            text,           -- outbound_click target
+
+        -- category: device
+        browser         text,
+        browser_version text,
+        os              text,
+        screen          text,
+        viewport        text,
+        language        text,
+        timezone        text,
+        device_type     text,           -- mobile | desktop
+
+        -- category: location. City level only. Coordinates stay null unless a
+        -- lookup genuinely returns one, and are rounded before they are stored.
+        city            text,
+        region          text,
+        country         text,
+        latitude        real,
+        longitude       real,
+
+        created_at      text not null
+      );
+      create index analytics_events_created on analytics_events(created_at desc);
+      create index analytics_events_type_created on analytics_events(type, created_at desc);
+      create index analytics_events_path on analytics_events(page_path);
+      create index analytics_events_device on analytics_events(device_type);
+      create index analytics_events_city on analytics_events(city);
+
+      -- A request to erase data. Kept so the ask is on record even where the
+      -- person gave no email and there is nothing to look up.
+      create table deletion_requests (
+        id          text primary key,
+        email       text not null,
+        details     text,
+        status      text not null default 'received',
+        created_at  text not null,
+        resolved_at text
+      );
+      create index deletion_requests_created on deletion_requests(created_at desc);
+      create index deletion_requests_email on deletion_requests(email);
+    `,
+  },
 ]
 
 function migrate(conn: DatabaseSync) {

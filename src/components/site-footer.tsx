@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { legalLinks, navLinks, site } from '@/lib/site'
+import { ConsentSettingsButton } from './consent-settings-button'
 
 export function SiteFooter() {
   return (
@@ -13,6 +14,9 @@ export function SiteFooter() {
               {site.contactEmail}
             </a>
           </p>
+          <div className="mt-4">
+            <ConsentSettingsButton />
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-8 sm:grid-cols-3">
