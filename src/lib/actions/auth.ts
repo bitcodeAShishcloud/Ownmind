@@ -21,6 +21,7 @@ import {
   recordOtpSend,
 } from '@/lib/otp'
 import { verifyTurnstile } from '@/lib/turnstile'
+import { callerIp } from '@/lib/geo'
 
 export type AuthState = {
   error?: string
@@ -40,8 +41,12 @@ const PENDING_TTL_MINUTES = 30
  * by caller so one person cannot flood one inbox from many turns.
  */
 async function getCallerId(): Promise<string> {
-  const h = await headers()
-  return h.get('x-forwarded-for')?.split(',')[0]?.trim() || h.get('x-real-ip') || 'unknown'
+  // Prefer the address the edge set over the one in X-Forwarded-For. With
+  // Cloudflare in front, X-Forwarded-For is a list the client may have
+  // prepended to, so its first entry is whatever the caller decided to send.
+  // Taking it at face value would let anyone reset the sign in rate limit just
+  // by sending a header, which is the one thing the limit exists to prevent.
+  return callerIp(await headers()) ?? 'unknown'
 }
 
 /** Every step that sends a code checks the challenge first. */

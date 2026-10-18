@@ -1,18 +1,25 @@
 /**
- * Approximate location, worked out from headers the edge already attached.
+ * Approximate location, resolved on our own server.
  *
- * The domain resolves through Cloudflare's nameservers, so when the proxy is
- * switched on the network address a request arrived on has already been turned
- * into a country, a region and a city before this server sees it. Reading those
- * headers keeps the lookup first party: no address is forwarded to a third party
- * to be resolved.
+ * The network address a request arrived on is looked up in a local MaxMind
+ * GeoLite2 database. Nothing is sent anywhere to be resolved: the address never
+ * leaves this process, which is why the privacy policy can say the lookup is
+ * ours alone.
  *
- * City, region and country only. There is deliberately no latitude or longitude
- * anywhere in this project, so a precise position cannot be obtained through
- * this path even by mistake, and navigator.geolocation is never called.
+ * City, region and country only. GeoLite2 also returns a latitude and a
+ * longitude, and this module deliberately throws them away rather than rounding
+ * them, because there is no column to store them and no plan to add one. The
+ * database has no coordinate column either.
+ *
+ * navigator.geolocation is never called anywhere in this project, so a precise
+ * position cannot be obtained through this path even by mistake.
  *
  * Server only.
  */
+
+import { existsSync } from 'node:fs'
+import { open, type Reader } from 'maxmind'
+import type { CityResponse } from 'mmdb-lib'
 
 export type ApproximateLocation = {
   city: string | null
@@ -20,38 +27,121 @@ export type ApproximateLocation = {
   country: string | null
 }
 
-/** Nothing was resolvable. Not an error: the caller simply has no location. */
 export const NO_LOCATION: ApproximateLocation = {
   city: null,
   region: null,
   country: null,
 }
 
+const DB_PATH =
+  process.env.OWNMIND_MAXMIND_DB_PATH || '/var/lib/ownmind/geoip/GeoLite2-City.mmdb'
+
 const CITY_RE = /^[a-z0-9 .'-]{1,64}$/i
 const REGION_RE = /^[a-z0-9 .'-]{1,64}$/i
 const COUNTRY_RE = /^[a-zA-Z]{2}$/
 
+let reader: Promise<Reader<CityResponse> | null> | null = null
+
 /**
- * Cloudflare sends placeholder values when it has nothing useful, and they
- * differ per header, so each is checked rather than stored verbatim. Anything
- * that fails its pattern is treated as absent.
+ * Open the database once and keep it. MaxMind readers hold an index in memory,
+ * so this is a few megabytes held for the life of the process rather than a
+ * per-request cost.
+ *
+ * A missing or unreadable file resolves to null instead of throwing. The
+ * location category then reports nothing, which is the honest outcome: the
+ * site is fully usable without it, and a visitor is never shown an error
+ * because a data file is absent.
  */
-function clean(value: string | null, pattern: RegExp): string | null {
+function loadReader(): Promise<Reader<CityResponse> | null> {
+  if (reader) return reader
+  reader = open<CityResponse>(DB_PATH).catch((error: unknown) => {
+    console.warn(
+      `[geo] could not open ${DB_PATH}: ${(error as Error).message}. ` +
+        'Location will be empty. Run: npm run fetch-geoip',
+    )
+    return null
+  })
+  return reader
+}
+
+/** A valid IPv4 or IPv6 address, or null. Anything else is not looked up. */
+function parseIp(value: string | null): string | null {
   if (!value) return null
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.length > 45) return null
+  // Cheap shape check before handing it to the reader, which is stricter.
+  if (!/^[0-9a-fA-F.:]+$/.test(trimmed)) return null
+  return trimmed
+}
+
+/**
+ * The address the request came from, in order of trustworthiness.
+ *
+ * cf-connecting-ip is set by the edge and cannot be spoofed by a client.
+ * x-forwarded-for is a list a client can prepend to, so the first entry is only
+ * believed when nothing better is present.
+ */
+export function callerIp(headers: Headers): string | null {
+  const connecting = parseIp(headers.get('cf-connecting-ip'))
+  if (connecting) return connecting
+
+  const forwarded = headers.get('x-forwarded-for')
+  if (forwarded) {
+    const first = parseIp(forwarded.split(',')[0] ?? null)
+    if (first) return first
+  }
+
+  return parseIp(headers.get('x-real-ip'))
+}
+
+function clean(value: unknown, pattern: RegExp): string | null {
+  if (typeof value !== 'string') return null
   const trimmed = value.trim()
   if (pattern.test(trimmed)) return trimmed
   return null
 }
 
-export function locationFromHeaders(headers: Headers): ApproximateLocation {
-  return {
+/**
+ * Look the address up. Cloudflare's headers are consulted first and act as a
+ * fallback, so the category keeps working if the proxy is ever switched on.
+ */
+export async function locationFor(headers: Headers): Promise<ApproximateLocation> {
+  const fromEdge: ApproximateLocation = {
     city: clean(headers.get('cf-ipcity'), CITY_RE),
     region: clean(headers.get('cf-region'), REGION_RE),
     country: clean(headers.get('cf-ipcountry'), COUNTRY_RE),
   }
+  if (fromEdge.city || fromEdge.country) return fromEdge
+
+  const ip = callerIp(headers)
+  if (!ip) return NO_LOCATION
+
+  const db = await loadReader()
+  if (!db) return NO_LOCATION
+
+  try {
+    const hit = db.get(ip)
+    if (!hit) return NO_LOCATION
+
+    // CityResponse.subdivisions is the region hierarchy, most specific first.
+    const subdivisions = hit.subdivisions
+
+    return {
+      city: clean(hit.city?.names?.en, CITY_RE),
+      region: clean(subdivisions?.[0]?.names?.en, REGION_RE),
+      country: clean(hit.country?.iso_code, COUNTRY_RE),
+    }
+  } catch {
+    // A malformed address or an unreadable record. No location is the answer.
+    return NO_LOCATION
+  }
 }
 
-/** True when something upstream resolved the address into a place. */
-export function edgeResolved(headers: Headers): boolean {
-  return headers.has('cf-ipcountry') || headers.has('cf-ipcity') || headers.has('cf-region')
+/** Cheap check for the ops page and the tests. Does the database exist? */
+export function geoipDatabasePresent(): boolean {
+  try {
+    return existsSync(DB_PATH)
+  } catch {
+    return false
+  }
 }

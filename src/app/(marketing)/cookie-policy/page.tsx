@@ -165,22 +165,19 @@ export default function CookiePolicyPage() {
           body: (
             <>
               <p>
-                Works out roughly where a visit came from, at city level. This
-                site is served through Cloudflare, which reads the network
-                address a request arrives on and attaches the country, region
-                and city as request headers. Our server reads those headers
-                directly.
+                Works out roughly where a visit came from, at city level. Our own
+                server looks the network address up in a MaxMind GeoLite2 database
+                held on this machine.
               </p>
               <p>
-                Your network address is never sent to a separate location
-                service to be looked up. <code>navigator.geolocation</code> is
-                not used anywhere in this project, and there is no way for it to
-                be used, so an exact position cannot be obtained through this
-                site even by accident.
+                Your network address is never sent to a separate location service
+                to be looked up. The lookup happens here, against a local file,
+                and the address itself is never stored. GeoLite2 data is created
+                by MaxMind and refreshed on this server every week.
               </p>
               <p>
-                Only three values are stored: the country, the region and the city. No
-                latitude, no longitude, and no street. The database has no
+                Only three values are stored: the country, the region and the
+                city. No latitude, no longitude, and no street. The database has no
                 column for a coordinate, so there is nowhere for one to be
                 kept even if it were offered.
               </p>

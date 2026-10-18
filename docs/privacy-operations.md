@@ -30,6 +30,62 @@ enforced in three independent places, so a bug in one does not leak:
    tell whether the person consented, so this is a backstop against malformed
    data, not a substitute for the client check.
 
+## Approximate location
+
+The location category resolves the network address on our own server against a
+MaxMind GeoLite2 City database held at:
+
+```
+/var/lib/ownmind/geoip/GeoLite2-City.mmdb
+```
+
+Cloudflare's `cf-*` headers are consulted first and act as a fallback. In
+practice that means country resolves from the edge and city comes from MaxMind,
+because the free Cloudflare plan does not send a usable `cf-ipcity`.
+
+**Nothing is sent anywhere to be looked up.** The address is read, looked up in a
+local file, and the address itself is not stored. Only city, region and country
+come out.
+
+### Setup
+
+```bash
+# 1. Free key: https://www.maxmind.com/en/geolite2/signup
+# 2. Add to /etc/ownmind/env
+OWNMIND_MAXMIND_LICENSE_KEY=<your key>
+
+# 3. Fetch the database (~70 MB)
+npm run fetch-geoip
+
+# 4. Restart so the reader picks it up
+systemctl restart ownmind
+curl -s https://sriprayagclasses.in/api/geo
+```
+
+Without the key or the file, `/api/geo` returns all nulls and the site is
+unaffected. Nothing throws, and no visitor sees an error.
+
+### Keeping it current
+
+```bash
+systemctl list-timers ownmind-geoip.timer    # next run
+systemctl start ownmind-geoip.service        # update now
+journalctl -u ownmind-geoip -n 20
+```
+
+MaxMind publishes twice weekly. A stale database shows up as a city that does
+not resolve, not as a wrong city.
+
+The download lands in a temporary directory and is renamed onto the live file.
+Rename on one filesystem is atomic, so a running reader sees the whole old
+database or the whole new one, never a half written file.
+
+### Licence
+
+The key lives in `/etc/ownmind/env` and is never committed. The database is
+gitignored. MaxMind's GeoLite2 terms require the product to be attributed, which
+the Cookie Policy does.
+
 ## Retention
 
 Numbers live in `src/lib/retention.ts` and nowhere else. The policy page and

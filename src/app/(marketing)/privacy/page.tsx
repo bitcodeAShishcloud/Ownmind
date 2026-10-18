@@ -101,9 +101,10 @@ export default function PrivacyPage() {
                 </li>
                 <li>
                   <strong>Approximate location</strong>: country, region and
-                  city from network headers. Nothing more precise is collected,
-                  and no coordinate is stored at all. Collected under the
-                  location category.
+                  city, worked out on our own server from the network address the
+                  request arrived on. Nothing more precise is collected, and no
+                  coordinate is stored at all. Collected under the location
+                  category.
                 </li>
                 <li>
                   <strong>Device information</strong>: browser, version,
@@ -294,9 +295,15 @@ export default function PrivacyPage() {
                   it.
                 </li>
                 <li>
-                  <strong>Cloudflare.</strong> Our domain is served through
-                  Cloudflare, which handles network traffic and turns an IP
-                  address into a country and city before it reaches us.
+                  <strong>MaxMind.</strong> Approximate city, region and country come from the
+                  GeoLite2 database we hold and refresh ourselves. The network
+                  address is not sent to MaxMind or to anyone else for the lookup.
+                  GeoLite2 is a product of MaxMind, Inc.
+                </li>
+                <li>
+                  <strong>Cloudflare.</strong> Our domain resolves through
+                  Cloudflare, which handles the challenge on the sign up and sign
+                  in forms.
                 </li>
               </ul>
             </>

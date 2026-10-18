@@ -74,3 +74,9 @@ vendor/
 coverage/
 .cache/
 tmp/
+
+# MaxMind GeoLite2 database. ~70 MB, fetched by scripts/fetch-geoip.mts, and
+# never in version control. The licence key lives in /etc/ownmind/env.
+*.mmdb
+*.mmdb.new
+*.tar.gz

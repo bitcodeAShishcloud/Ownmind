@@ -34,7 +34,7 @@ const {
   recordEvent,
   validateEvent,
 } = await import('../src/lib/analytics.ts')
-const { locationFromHeaders, NO_LOCATION } = await import('../src/lib/geo.ts')
+const { callerIp, geoipDatabasePresent, locationFor, NO_LOCATION } = await import('../src/lib/geo.ts')
 const {
   ANALYTICS_RETENTION_DAYS,
   CONSENT_RETENTION_DAYS,
@@ -164,22 +164,41 @@ try {
   /* ---------------------------------------------------------------- */
   section('location is approximate and comes from the edge')
 
+  // The MaxMind database is not installed in a test environment, so this is
+  // the path that matters most: a missing file has to degrade to no location
+  // rather than throw, because the site must not depend on a data file.
+  ok('the database is absent in tests', geoipDatabasePresent() === false)
+
   const headers = new Headers({
     'cf-ipcountry': 'IN',
     'cf-region': 'Karnataka',
     'cf-ipcity': 'Bengaluru',
   })
-  const place = locationFromHeaders(headers)
-  ok('country is read from the header', place.country === 'IN')
-  ok('city is read from the header', place.city === 'Bengaluru')
-  ok('region is read from the header', place.region === 'Karnataka')
+  const place = await locationFor(headers)
+  ok('an edge header city is used when present', place.city === 'Bengaluru')
+  ok('an edge header region is used when present', place.region === 'Karnataka')
+  ok('an edge header country is used when present', place.country === 'IN')
 
-  const bare = locationFromHeaders(new Headers())
-  ok('no edge headers means no location', bare.city === null && bare.country === null)
-  ok('the empty location is all nulls', bare.region === null && NO_LOCATION.city === null)
+  const noEdge = await locationFor(new Headers())
+  ok('no headers and no database means no location',
+    noEdge.city === null && noEdge.region === null && noEdge.country === null)
+  ok('the empty location is all nulls', NO_LOCATION.city === null && NO_LOCATION.country === null)
 
-  const junk = locationFromHeaders(new Headers({ 'cf-ipcity': 'A'.repeat(500) }))
+  const junk = await locationFor(new Headers({ 'cf-ipcity': 'A'.repeat(500) }))
   ok('an over long city is dropped', junk.city === null)
+
+  // A malformed address must not reach the reader as a crash.
+  const junkIp = await locationFor(new Headers({ 'x-forwarded-for': 'not-an-ip;;;' }))
+  ok('a malformed address is ignored', junkIp.city === null)
+
+  // Which address is trusted, when two disagree.
+  const spoofed = new Headers({ 'cf-connecting-ip': '8.8.8.8', 'x-forwarded-for': '1.2.3.4, 5.6.7.8' })
+  ok('the edge set address wins over a client supplied list', callerIp(spoofed) === '8.8.8.8')
+  ok('the first forwarded entry is used when there is no edge',
+    callerIp(new Headers({ 'x-forwarded-for': '1.2.3.4, 5.6.7.8' })) === '1.2.3.4')
+  ok('a real ip falls back to x-real-ip', callerIp(new Headers({ 'x-real-ip': '9.9.9.9' })) === '9.9.9.9')
+  ok('no headers at all yields no address', callerIp(new Headers()) === null)
+  ok('a nonsense address is rejected', callerIp(new Headers({ 'x-real-ip': 'rm -rf /' })) === null)
 
   // There is no coordinate anywhere in the type, so there is no coordinate to
   // store, round or leak.

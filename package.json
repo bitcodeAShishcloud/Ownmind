@@ -16,10 +16,12 @@
     "test:design": "node scripts/audit-design.mjs",
     "test:consent": "tsx scripts/test-consent.mts",
     "retention": "tsx scripts/run-retention.mts",
+    "fetch-geoip": "tsx scripts/fetch-geoip.mts",
     "favicon": "node scripts/make-favicon.mjs && node scripts/verify-favicon.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.48.0",
+    "maxmind": "^5.0.7",
     "next": "16.3.6",
     "node-html-parser": "^9.0.4",
     "react": "19.2.8",
