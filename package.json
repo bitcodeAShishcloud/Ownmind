@@ -16,6 +16,7 @@
     "test:design": "node scripts/audit-design.mjs",
     "test:consent": "tsx scripts/test-consent.mts",
     "retention": "tsx scripts/run-retention.mts",
+    "env": "tsx scripts/env.mts",
     "fetch-geoip": "tsx scripts/fetch-geoip.mts",
     "favicon": "node scripts/make-favicon.mjs && node scripts/verify-favicon.mjs"
   },

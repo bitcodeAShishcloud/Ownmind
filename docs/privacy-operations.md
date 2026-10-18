@@ -126,6 +126,31 @@ The key lives in `/root/Ownmind/.env` and is never committed. The database is
 gitignored. MaxMind's GeoLite2 terms require the product to be attributed, which
 the Cookie Policy does.
 
+## Changing a secret
+
+Everything lives in `.env`, and `npm run env` is the one command for it. It
+never prints a value, only whether one is set and how long it is, so a key can
+be rotated from the terminal rather than pasted into a chat.
+
+```bash
+npm run env                       # list every key, values hidden
+npm run env -- check               # what is missing
+npm run env -- set OWNMIND_ADMIN_TOKEN=<new>
+npm run env -- set KEY=value KEY2=value
+npm run env -- set OWNMIND_MAIL_FROM="OwnMind <no-reply@example.com>"
+npm run env -- unset OWNMIND_AI_API_KEY
+npm run env -- path                # where the file is
+```
+
+Setting a value rewrites just that line, so the comments in the file survive. The
+file stays mode 600. Restart the service afterwards:
+
+```bash
+systemctl restart ownmind
+```
+
+Order matters when rotating MaxMind. See below.
+
 ## Retention
 
 Numbers live in `src/lib/retention.ts` and nowhere else. The policy page and
