@@ -1,5 +1,9 @@
 /**
- * Authentication: scrypt password hashing plus opaque database backed sessions.
+ * Authentication: a code sent to the address is the proof, plus opaque database
+ * backed sessions.
+ *
+ * There is no password to store or check. The only thing standing between a
+ * stranger and an account is knowing the address and reading its inbox.
  *
  * Session cookies hold a 256 bit random token. Only the token id is stored, so
  * there is nothing to reverse if the database leaks. Tokens expire and are
@@ -19,9 +23,6 @@ const SESSION_DAYS = 30
 const PENDING_AUTH_COOKIE = 'ownmind_pending_auth'
 const PENDING_AUTH_TTL_HOURS = 1
 
-// Re-exported so server actions have one obvious import for auth concerns.
-export { hashPassword, verifyPassword, isAcceptablePassword } from './password'
-
 export type User = {
   id: string
   email: string
@@ -33,30 +34,24 @@ export type User = {
 export function findUserByEmail(email: string) {
   return db()
     .prepare('select * from users where email = ?')
-    .get(email.trim().toLowerCase()) as (User & { password_hash: string }) | undefined
+    .get(email.trim().toLowerCase()) as User | undefined
 }
 
 export function findUserById(id: string) {
   return db().prepare('select * from users where id = ?').get(id) as User | undefined
 }
 
-/** `passwordHash` must already be hashed with `hashPassword`. */
-export function insertUser(email: string, passwordHash: string, name?: string | null) {
+/** Accounts made through the code flow have no password to store. */
+export function insertUser(email: string, name?: string | null) {
   const id = newId()
   const createdAt = nowIso()
 
   db()
     .prepare(
       `insert into users (id, email, password_hash, name, theme, created_at)
-       values (?, ?, ?, ?, 'system', ?)`,
+       values (?, ?, null, ?, 'system', ?)`,
     )
-    .run(
-      id,
-      email.trim().toLowerCase(),
-      passwordHash,
-      name?.trim() || null,
-      createdAt,
-    )
+    .run(id, email.trim().toLowerCase(), name?.trim() || null, createdAt)
 
   return id
 }

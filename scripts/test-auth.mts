@@ -5,13 +5,11 @@
  *
  * Usage: npx tsx scripts/test-auth.mts [baseUrl]
  */
-import { rmSync } from 'node:fs'
 
 const BASE = process.argv[2] || 'http://localhost:3000'
 const CREATED_EMAIL = 'e2e-test@example.com'
 
 const { db, newId, nowIso } = await import('../src/lib/db.ts')
-const { hashPassword } = await import('../src/lib/password.ts')
 
 let failures = 0
 let checks = 0
@@ -32,12 +30,14 @@ async function cleanup() {
   const user = conn.prepare('select id from users where email = ?').get(CREATED_EMAIL) as
     | { id: string }
     | undefined
-  if (user) conn.prepare('delete from users where id = ?').run(user.id)
-  try {
-    rmSync(process.env.OWNMIND_DATA_DIR || '.data', { recursive: true, force: true })
-  } catch {
-    /* dev server may hold the handle */
-  }
+  if (!user) return
+
+  // Remove only what this run created. The data directory may well be the live
+  // one, so nothing else may be touched.
+  conn.prepare('delete from sessions where user_id = ?').run(user.id)
+  conn.prepare('delete from cards where user_id = ?').run(user.id)
+  conn.prepare('delete from spaces where user_id = ?').run(user.id)
+  conn.prepare('delete from users where id = ?').run(user.id)
 }
 
 try {
@@ -51,9 +51,9 @@ try {
   conn
     .prepare(
       `insert into users (id, email, password_hash, name, theme, created_at)
-       values (?, ?, ?, 'E2E', 'system', ?)`,
+       values (?, ?, null, 'E2E', 'system', ?)`,
     )
-    .run(userId, CREATED_EMAIL, await hashPassword('a sufficiently long password'), nowIso())
+    .run(userId, CREATED_EMAIL, nowIso())
 
   conn
     .prepare('insert into sessions (id, user_id, created_at, expires_at) values (?, ?, ?, ?)')
@@ -239,87 +239,52 @@ try {
     ok('the settings page asks robots not to index', html.includes('noindex'))
   }
 
-  console.log('\npassword reset pages')
+  console.log('\nthere is no password to reset')
 {
-  const forgot = await fetch(`${BASE}/forgot-password`)
-  ok('the forgot password page is reachable', forgot.status === 200, `got ${forgot.status}`)
-  const forgotHtml = await forgot.text()
-  ok('the forgot password page has the right heading', forgotHtml.includes('Reset your password'))
-  ok('the forgot password page asks for an email', forgotHtml.includes('Send the link'))
-
-  const noToken = await fetch(`${BASE}/reset-password`)
-  ok('the reset page without a token is still 200', noToken.status === 200, `got ${noToken.status}`)
-  const noTokenHtml = await noToken.text()
-  ok('the reset page refuses to show a form without a valid token', noTokenHtml.includes('That link has expired'))
-
-  const badToken = await fetch(`${BASE}/reset-password?token=not-a-real-token`)
-  const badHtml = await badToken.text()
-  ok('a bogus token does not reveal a form', badHtml.includes('That link has expired'))
+  for (const gone of ['/forgot-password', '/reset-password', '/signup/password', '/signin/password']) {
+    const res = await fetch(`${BASE}${gone}`)
+    ok(`${gone} is gone`, res.status === 404, `got ${res.status}`)
+  }
 
   const signinHtml = await (await fetch(`${BASE}/signin`)).text()
-  ok('sign in links to the forgot password page', signinHtml.includes('/forgot-password'))
+  ok('sign in never mentions a password', !/password/i.test(signinHtml.replace(/No password\./gi, '')))
+  ok('sign in asks for a code', signinHtml.includes('otpCode') || signinHtml.includes('Six-digit code'))
 
-  const resetNotice = await (await fetch(`${BASE}/signin?reset=1`)).text()
-  ok('a completed reset is confirmed on sign in', resetNotice.includes('Password changed'))
+  const signupHtml = await (await fetch(`${BASE}/signup`)).text()
+  ok('sign up never mentions a password', !/password/i.test(signupHtml.replace(/No password\./gi, '')))
+  ok('sign up carries no password field', !signupHtml.includes('name="password"'))
 }
 
-console.log('\nreset token lifecycle in the database')
+console.log('\nthe challenge is Turnstile')
+{
+  const html = await (await fetch(`${BASE}/signin`)).text()
+  ok('the widget is marked up for Cloudflare', html.includes('turnstile'))
+  ok('the widget posts a token the server can check', html.includes('turnstileToken'))
+  ok('the page ships no home made arithmetic', !/What is [0-9]/.test(html))
+  ok('nothing is stored for the challenge', !html.includes('captchaToken'))
+}
+
+console.log('\nno flow token leaks into a page')
+{
+  for (const p of ['/signup', '/signup/email', '/signin']) {
+    const html = await (await fetch(`${BASE}${p}`)).text()
+    ok(`${p} carries no token in the address`, !html.includes('?token='), p)
+  }
+}
+
+console.log('\naccounts carry no password')
 {
   const conn = db()
-  const before = (
-    conn.prepare('select count(*) as n from password_resets').get() as { n: number }
-  ).n
+  const row = conn
+    .prepare('select password_hash from users where email = ?')
+    .get(CREATED_EMAIL) as { password_hash: string | null }
+  ok('the seeded user has no stored password', row.password_hash === null)
 
-  // Requesting a reset for the seeded user creates exactly one live token.
-  conn
-    .prepare(
-      `insert into password_resets (id, user_id, created_at, expires_at)
-       values ('tok-1', ?, ?, ?)`,
-    )
-    .run(
-      userId,
-      nowIso(),
-      new Date(Date.now() + 3_600_000).toISOString(),
-    )
-
-  const after = (
-    conn.prepare('select count(*) as n from password_resets where used_at is null').get() as {
-      n: number
-    }
-  ).n
-  ok('a reset token is recorded as unused', after === before + 1, `${before} to ${after}`)
-
-  // An expired token must not count as usable.
-  conn
-    .prepare(
-      `insert into password_resets (id, user_id, created_at, expires_at)
-       values ('tok-old', ?, ?, ?)`,
-    )
-    .run(userId, nowIso(), new Date(Date.now() - 1000).toISOString())
-  const liveTokens = conn
-    .prepare(`select count(*) as n from password_resets where expires_at > ? and used_at is null`)
-    .get(nowIso()) as { n: number }
-  ok('an expired token is not counted as live', liveTokens.n === 1, String(liveTokens.n))
-
-  // Deleting the account must take its reset tokens with it.
-  const throwaway = newId()
-  conn
-    .prepare(
-      `insert into users (id, email, password_hash, name, theme, created_at)
-       values (?, 'throwaway@example.com', 'x', 'T', 'system', ?)`,
-    )
-    .run(throwaway, nowIso())
-  conn
-    .prepare(
-      `insert into password_resets (id, user_id, created_at, expires_at)
-       values ('tok-t', ?, ?, ?)`,
-    )
-    .run(throwaway, nowIso(), new Date(Date.now() + 3_600_000).toISOString())
-  conn.prepare('delete from users where id = ?').run(throwaway)
-  const orphans = conn
-    .prepare('select count(*) as n from password_resets where user_id = ?')
-    .get(throwaway) as { n: number }
-  ok('reset tokens are removed with the account', orphans.n === 0, String(orphans.n))
+  const tables = (
+    conn.prepare(`select name from sqlite_master where type = 'table'`).all() as Array<{ name: string }>
+  ).map((r) => r.name)
+  ok('the password reset table is gone', !tables.includes('password_resets'))
+  ok('the hand rolled captcha table is gone', !tables.includes('captcha_tokens'))
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

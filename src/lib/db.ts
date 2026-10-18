@@ -245,6 +245,24 @@ const migrations: Migration[] = [
       create index captcha_tokens_expires on captcha_tokens(expires_at);
     `,
   },
+  {
+    name: '007_passwordless',
+    sql: /* sql */ `
+      -- Sign in is proved by a code sent to the address, so there is no password
+      -- to store. The column stays because it still holds the hash for anyone
+      -- who signed up before this change; those rows are left untouched and are
+      -- simply never read again. SQLite cannot drop a column on every version,
+      -- and nulling them out would throw away data for no gain.
+      alter table users alter column password_hash drop not null;
+
+      -- Password resets only existed to hand out a new password.
+      drop table if exists password_resets;
+
+      -- Replaced by Cloudflare Turnstile, which verifies on its own servers and
+      -- needs nothing stored here.
+      drop table if exists captcha_tokens;
+    `,
+  },
 ]
 
 function migrate(conn: DatabaseSync) {

@@ -1,8 +1,9 @@
 'use client'
 
-import { useActionState, useState } from 'react'
+import { useActionState } from 'react'
 import Link from 'next/link'
 import { Loader2 } from 'lucide-react'
+import { Turnstile } from '@/components/turnstile'
 import type { AuthState } from '@/lib/actions/auth'
 
 const initial: AuthState = {}
@@ -13,14 +14,14 @@ type Action = (state: AuthState, formData: FormData) => Promise<AuthState>
  * One screen, one job. Every field a step will ever ask for is on the page from
  * the first paint, so nothing swaps out from under the person filling it in.
  */
-type Step = 'name' | 'email' | 'password'
+type Step = 'name' | 'code'
 
 export function AuthForm({
   step,
   action,
   sendAction,
+  siteKey,
   notice,
-  captcha: initialCaptcha,
 }: {
   /** The step this screen is on. */
   step: Step
@@ -28,30 +29,42 @@ export function AuthForm({
   action: Action
   /** On the address and code screen, the action that posts the code out. */
   sendAction?: Action
+  /** Turnstile's browser-side key. */
+  siteKey: string
   notice?: string
-  captcha?: { question: string; token: string }
 }) {
   const [sendState, sendFormAction, sending] = useActionState(sendAction ?? noop, initial)
   const [state, formAction, pending] = useActionState(action, initial)
-  const [captcha] = useState(initialCaptcha ?? null)
 
   const error = state.error ?? sendState.error
   const sent = sendState.sent === true
-  const showCaptcha = Boolean(captcha) && step === 'name'
 
   return (
     <div className="flex flex-col gap-4">
       {notice ? <Notice>{notice}</Notice> : null}
-      {sent ? (
-        <Notice>
-          Check your email. The code is good for ten minutes.
-        </Notice>
-      ) : null}
+      {sent ? <Notice>Check your email. The code is good for ten minutes.</Notice> : null}
       {error ? <Error>{error}</Error> : null}
 
       {sendAction ? (
-        <form action={sendFormAction} className="flex flex-col gap-4 border-b border-line pb-5" noValidate>
-          <AddressStep captcha={captcha} pending={sending} />
+        <form
+          action={sendFormAction}
+          className="flex flex-col gap-4 border-b border-line pb-5"
+          noValidate
+        >
+          <Field
+            label="Email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
+          />
+
+          <Turnstile siteKey={siteKey} action="send-code" />
+
+          <button type="submit" className="btn btn-outline w-full" disabled={sending}>
+            {sending ? <Loader2 size={14} strokeWidth={2} className="animate-spin" /> : null}
+            {sending ? 'Sending' : 'Send the code'}
+          </button>
         </form>
       ) : null}
 
@@ -66,101 +79,46 @@ export function AuthForm({
           />
         ) : null}
 
-        {step === 'email' ? <CodeField /> : null}
-
-        {step === 'password' ? (
+        {sendAction ? null : (
           <Field
-            label="Password"
-            name="password"
-            type="password"
-            autoComplete="new-password"
-            hint="At least 10 characters."
+            label="Email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
+          />
+        )}
+
+        {step === 'code' ? (
+          <Field
+            label="Six-digit code"
+            name="otpCode"
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            required
+            hint="From the email we just sent."
           />
         ) : null}
 
-        {showCaptcha && captcha ? <CaptchaField captcha={captcha} /> : null}
+        {step === 'name' ? <Turnstile siteKey={siteKey} action="signup" /> : null}
 
         <button type="submit" className="btn btn-primary w-full" disabled={pending || sending}>
           {pending ? <Loader2 size={14} strokeWidth={2} className="animate-spin" /> : null}
-          {step === 'password' ? 'Create account' : 'Continue'}
+          {step === 'name' ? 'Next' : 'Finish'}
         </button>
       </form>
 
       <p className="text-center text-sm text-muted">
-        {step === 'password' ? 'Already have an account? ' : 'New to OwnMind? '}
+        {step === 'code' ? 'New to OwnMind? ' : 'Already have an account? '}
         <Link
-          href={step === 'password' ? '/signin' : '/signup'}
+          href={step === 'code' ? '/signup' : '/signin'}
           className="text-ink underline underline-offset-2 hover:text-accent-ink"
         >
-          {step === 'password' ? 'Sign in' : 'Create an account'}
+          {step === 'code' ? 'Create an account' : 'Sign in'}
         </Link>
       </p>
-    </div>
-  )
-}
-
-/* -------------------------------------------------------------------------- */
-/* Pieces                                                                     */
-/* -------------------------------------------------------------------------- */
-
-/** The address, and on sign in the arithmetic check that goes with it. */
-function AddressStep({
-  captcha,
-  pending,
-}: {
-  captcha: { question: string; token: string } | null
-  pending: boolean
-}) {
-  return (
-    <>
-      <Field
-        label="Email"
-        name="email"
-        type="email"
-        autoComplete="email"
-        required
-      />
-
-      {captcha ? <CaptchaField captcha={captcha} /> : null}
-
-      <button type="submit" className="btn btn-outline w-full" disabled={pending}>
-        {pending ? <Loader2 size={14} strokeWidth={2} className="animate-spin" /> : null}
-        {pending ? 'Sending' : 'Send the code'}
-      </button>
-    </>
-  )
-}
-
-function CodeField() {
-  return (
-    <Field
-      label="Six-digit code"
-      name="otpCode"
-      type="text"
-      inputMode="numeric"
-      autoComplete="one-time-code"
-      maxLength={6}
-      required
-      hint="From the email we just sent."
-    />
-  )
-}
-
-function CaptchaField({ captcha }: { captcha: { question: string; token: string } }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label htmlFor="captcha-answer" className="text-sm font-medium">
-        {captcha.question}
-      </label>
-      <input
-        id="captcha-answer"
-        name="captchaAnswer"
-        type="number"
-        inputMode="numeric"
-        required
-        className="field w-20"
-      />
-      <input type="hidden" name="captchaToken" value={captcha.token} />
     </div>
   )
 }

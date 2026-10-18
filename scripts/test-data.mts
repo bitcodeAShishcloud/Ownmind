@@ -11,9 +11,7 @@ process.env.OWNMIND_DATA_DIR = DATA_DIR
 // The schema is created on first connection.
 const { db, nowIso, newId } = await import('../src/lib/db.ts')
 const cards = await import('../src/lib/cards.ts')
-const { hashPassword, verifyPassword } = await import('../src/lib/password.ts')
 const { keywords, extractiveSummary, enrich } = await import('../src/lib/enrich.ts')
-const reset = await import('../src/lib/password-reset.ts')
 
 let failures = 0
 let checks = 0
@@ -50,15 +48,15 @@ for (const user of [alice, bob]) {
   conn
     .prepare(
       `insert into users (id, email, password_hash, name, theme, created_at)
-       values (?, ?, ?, 'Test', 'system', ?)`,
+       values (?, ?, null, 'Test', 'system', ?)`,
     )
-    .run(user.id, user.email, 'scrypt$notused$notused', nowIso())
+    .run(user.id, user.email, nowIso())
 }
 
 const version = (
   conn.prepare('pragma user_version').get() as { user_version: number }
 ).user_version
-ok('every migration has been applied', version >= 2, `user_version ${version}`)
+ok('every migration has been applied', version >= 7, `user_version ${version}`)
 
 const tableNames = (
   conn
@@ -74,22 +72,41 @@ for (const table of [
   'spaces',
   'space_cards',
   'card_fts',
-  'password_resets',
+  'otp_codes',
+  'otp_rate_limits',
+  'pending_auth',
 ]) {
   ok(`table ${table} exists`, tableNames.includes(table), tableNames.join(', '))
+}
+for (const table of ['password_resets', 'captcha_tokens']) {
+  ok(`table ${table} is gone`, !tableNames.includes(table), tableNames.join(', '))
 }
 ok('fts5 index exists', Boolean(conn.prepare("select name from sqlite_master where name='card_fts'").get()))
 
 /* ------------------------------------------------------------------ */
-section('password hashing')
+section('accounts carry no password')
 
-const hash = await hashPassword('correct horse battery staple')
-ok('hash is not the plaintext', !hash.includes('correct horse'))
-ok('hash is prefixed with the scheme', hash.startsWith('scrypt$'))
-ok('correct password verifies', await verifyPassword('correct horse battery staple', hash))
-ok('wrong password is rejected', !(await verifyPassword('wrong password', hash)))
-ok('two hashes of the same password differ (salted)', hash !== (await hashPassword('correct horse battery staple')))
-ok('a malformed stored hash is rejected, not thrown', !(await verifyPassword('anything', 'garbage')))
+const { insertUser, findUserByEmail } = await import('../src/lib/session.ts')
+const made = insertUser('made@example.com', 'Made Up')
+const madeRow = conn.prepare('select * from users where email = ?').get('made@example.com') as {
+  id: string
+  password_hash: string | null
+}
+ok('the column accepts a null', madeRow.password_hash === null)
+ok('the row exists with an id', typeof madeRow.id === 'string' && madeRow.id.length > 0)
+ok('findUserByEmail finds it', findUserByEmail('made@example.com')?.id === made)
+ok('a missing address is not found', findUserByEmail('nobody@example.com') === undefined)
+ok(
+  'two accounts with the same address cannot both exist',
+  (() => {
+    try {
+      insertUser('made@example.com')
+      return false
+    } catch {
+      return true
+    }
+  })(),
+)
 
 /* ------------------------------------------------------------------ */
 section('creating cards')
@@ -313,91 +330,6 @@ ok('links are removed with the user', cards.linkedCards(bob.id, bobCard.id).leng
 ok('spaces are removed with the user', cards.listSpaces(bob.id).length < bobSpacesBefore)
 ok('sessions for the user are removed', (conn.prepare('select count(*) as n from sessions where user_id = ?').get(bob.id) as { n: number }).n === 0)
 
-/* ------------------------------------------------------------------ */
-section('password reset tokens')
-
-{
-  const target = newId()
-  conn
-    .prepare(
-      `insert into users (id, email, password_hash, name, theme, created_at)
-       values (?, 'reset@example.com', 'scrypt$x$y', 'R', 'system', ?)`,
-    )
-    .run(target, nowIso())
-
-  const token = reset.createResetToken(target)
-  ok('a token is 256 bits of base64url', token.length >= 43, String(token.length))
-  ok('the token is valid when just created', reset.isResetTokenValid(token))
-  ok('an empty token is not valid', !reset.isResetTokenValid(''))
-  ok('a made up token is not valid', !reset.isResetTokenValid('made-up-token'))
-
-  const first = token
-  const second = reset.createResetToken(target)
-  ok('tokens are random per request', first !== second)
-  ok('issuing a new token invalidates the old one', !reset.isResetTokenValid(first))
-  ok('the new token is valid', reset.isResetTokenValid(second))
-
-  const newHash = await hashPassword('a brand new password')
-  const redeemed = reset.redeemResetToken(second, newHash)
-  ok('a valid token redeems', redeemed.ok)
-
-  if (redeemed.ok) {
-    const row = conn
-      .prepare('select password_hash from users where id = ?')
-      .get(target) as { password_hash: string }
-    ok('the password hash was replaced', row.password_hash === newHash)
-    ok('the old password no longer verifies', !(await verifyPassword('a brand new password', newHash.slice(0, -2) + 'AA')))
-  }
-
-  ok('a spent token cannot be reused', !reset.isResetTokenValid(second))
-  ok(
-    'redeeming a spent token fails',
-    !reset.redeemResetToken(second, await hashPassword('another attempt here')).ok,
-  )
-  ok(
-    'redeeming a fabricated token fails',
-    !reset.redeemResetToken('nope', await hashPassword('another attempt here')).ok,
-  )
-
-  const remaining = (
-    conn.prepare('select count(*) as n from password_resets where user_id = ?').get(target) as {
-      n: number
-    }
-  ).n
-  ok('spent tokens are cleaned up', remaining === 0, String(remaining))
-
-  // An expired token must be treated as dead.
-  const expiring = reset.createResetToken(target)
-  conn
-    .prepare('update password_resets set expires_at = ? where id = ?')
-    .run(new Date(Date.now() - 1000).toISOString(), expiring)
-  ok('an expired token is invalid', !reset.isResetTokenValid(expiring))
-  ok('an expired token cannot be redeemed', !reset.redeemResetToken(expiring, await hashPassword('too late for that')).ok)
-
-  // A password change must sign every device out.
-  const victim = newId()
-  conn
-    .prepare(
-      `insert into users (id, email, password_hash, name, theme, created_at)
-       values (?, 'sessions@example.com', 'scrypt$x$y', 'S', 'system', ?)`,
-    )
-    .run(victim, nowIso())
-  conn
-    .prepare('insert into sessions (id, user_id, created_at, expires_at) values (?, ?, ?, ?)')
-    .run('sess-a', victim, nowIso(), new Date(Date.now() + 86_400_000).toISOString())
-  conn
-    .prepare('insert into sessions (id, user_id, created_at, expires_at) values (?, ?, ?, ?)')
-    .run('sess-b', victim, nowIso(), new Date(Date.now() + 86_400_000).toISOString())
-
-  const victimToken = reset.createResetToken(victim)
-  reset.redeemResetToken(victimToken, await hashPassword('a fresh new password'))
-  const left = (
-    conn.prepare('select count(*) as n from sessions where user_id = ?').get(victim) as {
-      n: number
-    }
-  ).n
-  ok('a password reset signs every device out', left === 0, `${left} sessions left`)
-}
 
 /* ------------------------------------------------------------------ */
 section('heuristics')
