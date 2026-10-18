@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, useState } from 'react'
 import Link from 'next/link'
 import { Loader2 } from 'lucide-react'
 import { Turnstile } from '@/components/turnstile'
@@ -13,6 +13,10 @@ type Action = (state: AuthState, formData: FormData) => Promise<AuthState>
 /**
  * One screen, one job. Every field a step will ever ask for is on the page from
  * the first paint, so nothing swaps out from under the person filling it in.
+ *
+ * `sendAction` being set means this screen sends a code: the address and the
+ * code are both on it at once. Otherwise it is the name screen, which only
+ * asks for a name.
  */
 type Step = 'name' | 'code'
 
@@ -23,11 +27,10 @@ export function AuthForm({
   siteKey,
   notice,
 }: {
-  /** The step this screen is on. */
   step: Step
   /** The action that moves the flow forward. */
   action: Action
-  /** On the address and code screen, the action that posts the code out. */
+  /** The action that posts a code out. */
   sendAction?: Action
   /** Turnstile's browser-side key. */
   siteKey: string
@@ -36,8 +39,16 @@ export function AuthForm({
   const [sendState, sendFormAction, sending] = useActionState(sendAction ?? noop, initial)
   const [state, formAction, pending] = useActionState(action, initial)
 
+  // Held in React state rather than left to the DOM. A form action re-renders
+  // this component, and an uncontrolled field loses what was typed when that
+  // happens. The value has to belong to React to survive its own submit.
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [code, setCode] = useState('')
+
   const error = state.error ?? sendState.error
   const sent = sendState.sent === true
+  const busy = pending || sending
 
   return (
     <div className="flex flex-col gap-4">
@@ -57,12 +68,14 @@ export function AuthForm({
             type="email"
             autoComplete="email"
             required
+            value={email}
+            onChange={setEmail}
           />
 
           <Turnstile siteKey={siteKey} action="send-code" />
 
-          <button type="submit" className="btn btn-outline w-full" disabled={sending}>
-            {sending ? <Loader2 size={14} strokeWidth={2} className="animate-spin" /> : null}
+          <button type="submit" className="btn btn-outline w-full" disabled={busy}>
+            {busy ? <Loader2 size={14} strokeWidth={2} className="animate-spin" /> : null}
             {sending ? 'Sending' : 'Send the code'}
           </button>
         </form>
@@ -76,18 +89,10 @@ export function AuthForm({
             type="text"
             autoComplete="name"
             hint="Optional. Shows in the corner of your workspace."
+            value={name}
+            onChange={setName}
           />
         ) : null}
-
-        {sendAction ? null : (
-          <Field
-            label="Email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            required
-          />
-        )}
 
         {step === 'code' ? (
           <Field
@@ -99,12 +104,14 @@ export function AuthForm({
             maxLength={6}
             required
             hint="From the email we just sent."
+            value={code}
+            onChange={setCode}
           />
         ) : null}
 
         {step === 'name' ? <Turnstile siteKey={siteKey} action="signup" /> : null}
 
-        <button type="submit" className="btn btn-primary w-full" disabled={pending || sending}>
+        <button type="submit" className="btn btn-primary w-full" disabled={busy}>
           {pending ? <Loader2 size={14} strokeWidth={2} className="animate-spin" /> : null}
           {step === 'name' ? 'Next' : 'Finish'}
         </button>
@@ -132,6 +139,8 @@ function Field({
   required,
   maxLength,
   inputMode,
+  value,
+  onChange,
 }: {
   label: string
   name: string
@@ -141,6 +150,8 @@ function Field({
   required?: boolean
   maxLength?: number
   inputMode?: 'numeric'
+  value: string
+  onChange: (value: string) => void
 }) {
   return (
     <div className="flex flex-col gap-1.5">
@@ -156,6 +167,8 @@ function Field({
         required={required}
         maxLength={maxLength}
         className="field"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
       />
       {hint ? <p className="text-sm text-muted">{hint}</p> : null}
     </div>
